@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "frontend: install",
+      "type": "shell",
+      "command": "npm ci",
+      "options": { "cwd": "${workspaceFolder}/bbq/src/frontend" },
+      "group": "build"
+    },
+    {
+      "label": "frontend: build",
+      "type": "shell",
+      "command": "npm run build",
+      "options": { "cwd": "${workspaceFolder}/bbq/src/frontend" },
+      "group": "build",
+      "dependsOn": "frontend: install"
+    },
+    {
+      "label": "frontend: dev",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": { "cwd": "${workspaceFolder}/bbq/src/frontend" },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "." },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "Ready"
+        }
+      }
+    },
+    {
+      "label": "backend: build",
+      "type": "shell",
+      "command": "dotnet build",
+      "options": { "cwd": "${workspaceFolder}/bbq/src/backend" },
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "backend: run",
+      "type": "shell",
+      "command": "dotnet run",
+      "options": { "cwd": "${workspaceFolder}/bbq/src/backend" },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "publish: win-x64",
+      "type": "shell",
+      "command": "dotnet publish -c Release -r win-x64",
+      "options": { "cwd": "${workspaceFolder}/bbq/src/backend" },
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "full: build",
+      "type": "shell",
+      "command": "dotnet build",
+      "options": { "cwd": "${workspaceFolder}/bbq/src/backend" },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$msCompile"
+    }
+  ]
+}

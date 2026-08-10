@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Carcosa Server",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/bbq/src/backend/bin/Debug/net10.0/Carcosa.Server.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/bbq/src/backend",
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "preLaunchTask": "full: build",
+      "console": "integratedTerminal",
+      "serverReadyAction": {
+        "action": "openExternally",
+        "pattern": "Server running on (https?://\\S+)"
+      }
+    }
+  ]
+}

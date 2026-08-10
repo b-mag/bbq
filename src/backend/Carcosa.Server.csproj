@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Carcosa.Server</RootNamespace>
+
+    <!-- Native AOT Configuration -->
+    <PublishAot>true</PublishAot>
+    <TrimMode>full</TrimMode>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StripSymbols>true</StripSymbols>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+
+    <!-- Single file with embedded content -->
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+
+  <!-- Build frontend before .NET build -->
+  <Target Name="BuildFrontend" BeforeTargets="BeforeBuild" Condition="'$(SkipFrontendBuild)' != 'true'">
+    <Message Text="Building frontend..." Importance="high" />
+    <Exec Command="npm ci --prefer-offline" WorkingDirectory="$(MSBuildProjectDirectory)\..\frontend" />
+    <Exec Command="npm run build" WorkingDirectory="$(MSBuildProjectDirectory)\..\frontend" />
+    <RemoveDir Directories="$(MSBuildProjectDirectory)\wwwroot" />
+    <MakeDir Directories="$(MSBuildProjectDirectory)\wwwroot" />
+    <ItemGroup>
+      <FrontendOutput Include="$(MSBuildProjectDirectory)\..\frontend\out\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(FrontendOutput)"
+          DestinationFiles="@(FrontendOutput->'$(MSBuildProjectDirectory)\wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+
+  <!-- Clean frontend output -->
+  <Target Name="CleanFrontend" AfterTargets="Clean">
+    <RemoveDir Directories="$(MSBuildProjectDirectory)\wwwroot" />
+  </Target>
+
+</Project>

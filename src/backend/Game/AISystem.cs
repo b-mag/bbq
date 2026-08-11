@@ -1,7 +1,31 @@
+// =============================================================================
+// AISystem.cs — Enemy AI State Machine
+// =============================================================================
+//
+// WHY STATE MACHINE (not behavior trees):
+// A simple state machine (Idle/Patrol/Chase/Attack/Flee) is sufficient for
+// enemies in a wave-defense game. Behavior trees add complexity that's only
+// justified for enemies with many overlapping priorities. Our enemies have
+// straightforward behavior: see player → chase → attack → flee if dying.
+//
+// WHY SEPARATE AIBrain OBJECTS:
+// Entity.cs stays lean (just position/health/combat data). AI state (which player
+// am I chasing, how long have I been patrolling, where am I heading) is stored
+// in AIBrain objects keyed by entity ID. This separation means non-AI entities
+// (players, projectiles) don't carry unused AI fields.
+//
+// PERFORMANCE:
+// AI runs every tick but expensive operations (pathfinding) are rate-limited:
+//   - Path recalculation: every 10 ticks (500ms)
+//   - State transitions: based on tick counters and distance checks (very cheap)
+//   - MaxSearchNodes=500 in pathfinding prevents runaway searches on complex maps
+// =============================================================================
+
 namespace Carcosa.Server.Game;
 
 /// <summary>
-/// AI states for enemy entities.
+/// AI states for enemy entities. Each state has distinct behavior and
+/// transition conditions documented in AISystem.UpdateEnemy().
 /// </summary>
 public enum AIState
 {
@@ -165,8 +189,8 @@ public sealed class AISystem
                     break;
                 }
 
-                // Check if in attack range
-                var attackRange = enemy.SubType == "cultist_chanter" ? AttackRangeRanged : AttackRangeMelee;
+                // Check if in attack range (ranged enemies attack from distance)
+                var attackRange = IsRangedEnemy(enemy.SubType) ? AttackRangeRanged : AttackRangeMelee;
                 if (nearestDist <= attackRange)
                 {
                     brain.State = AIState.Attack;
@@ -197,7 +221,7 @@ public sealed class AISystem
                     break;
                 }
 
-                var atkRange = enemy.SubType == "cultist_chanter" ? AttackRangeRanged : AttackRangeMelee;
+                var atkRange = IsRangedEnemy(enemy.SubType) ? AttackRangeRanged : AttackRangeMelee;
                 if (nearestDist > atkRange * 1.2f)
                 {
                     brain.State = AIState.Chase;
@@ -256,35 +280,67 @@ public sealed class AISystem
         switch (enemy.SubType)
         {
             case "cultist_acolyte":
-                // Melee attack
+                // Melee attack — basic cultist rushes in and strikes
                 target.TakeDamage(5);
+                break;
+
+            case "cultist_torch":
+                // Melee + burn DoT — torch cultist sets player on fire
+                // Deals 8 immediate damage. DoT is handled by marking the target.
+                // (DoT tick damage applied by GameFlowSystem if we add a burn status later;
+                //  for now we do burst 8 + 3 bonus = 11 total as a single hit.)
+                target.TakeDamage(11);
                 break;
 
             case "cultist_chanter":
                 // Ranged: fire an eldritch bolt toward the player
-                var angle = MathF.Atan2(target.Y - enemy.Y, target.X - enemy.X);
-                var proj = new Entity
+                FireEnemyProjectile(state, enemy, target, "eldritch_bolt", 8, 10f, 0.4f);
+                break;
+
+            case "cultist_dagger":
+                // Ranged: throw a fast dagger projectile
+                FireEnemyProjectile(state, enemy, target, "dagger", 6, 8f, 0.5f);
+                break;
+
+            case "cultist_shotgun":
+                // Ranged: fire a spread of 5 pellets (shotgun blast)
+                var baseAngle = MathF.Atan2(target.Y - enemy.Y, target.X - enemy.X);
+                for (int i = 0; i < 5; i++)
                 {
-                    Id = $"eproj_{_rng.Next(100000)}",
-                    Type = EntityType.Projectile,
-                    SubType = "eldritch_bolt",
-                    X = enemy.X + MathF.Cos(angle) * 0.5f,
-                    Y = enemy.Y + MathF.Sin(angle) * 0.5f,
-                    VelocityX = MathF.Cos(angle) * 0.4f,
-                    VelocityY = MathF.Sin(angle) * 0.4f,
-                    Damage = 8,
-                    Range = 10f,
-                    SourceEntityId = enemy.Id,
-                    IsAlive = true,
-                    IsDirty = true,
-                    Health = 1,
-                    MaxHealth = 1
-                };
-                state.AddEntity(proj);
+                    var spreadOffset = (i - 2) * 0.15f; // ~±0.3 radians total spread
+                    var pelletAngle = baseAngle + spreadOffset + (_rng.NextSingle() - 0.5f) * 0.1f;
+                    var pelletId = $"eproj_{_rng.Next(100000)}";
+                    var pellet = new Entity
+                    {
+                        Id = pelletId,
+                        Type = EntityType.Projectile,
+                        SubType = "shotgun_pellet",
+                        X = enemy.X + MathF.Cos(pelletAngle) * 0.5f,
+                        Y = enemy.Y + MathF.Sin(pelletAngle) * 0.5f,
+                        VelocityX = MathF.Cos(pelletAngle) * 0.5f,
+                        VelocityY = MathF.Sin(pelletAngle) * 0.5f,
+                        Damage = 3,
+                        Range = 6f,
+                        SourceEntityId = enemy.Id,
+                        IsAlive = true,
+                        IsDirty = true,
+                        Health = 1,
+                        MaxHealth = 1
+                    };
+                    state.AddEntity(pellet);
+                }
+                break;
+
+            case "cultist_lightning":
+                // Ranged: fire a lightning bolt that passes through entities (hits multiple)
+                // Lightning bolt has high range and damage but slow cooldown
+                FireEnemyProjectile(state, enemy, target, "lightning_bolt", 12, 12f, 0.6f);
+                // Note: the "passes through" behavior is handled in GameLoop.CheckCollisions
+                // by NOT removing lightning_bolt projectiles on first hit
                 break;
 
             case "cult_leader":
-                // AoE damage to all nearby players
+                // AoE damage to all nearby players within 2-tile radius
                 foreach (var player in state.GetAlivePlayers())
                 {
                     var dx = player.X - enemy.X;
@@ -295,16 +351,89 @@ public sealed class AISystem
                     }
                 }
                 break;
+
+            case "boss_warehouse":
+                // Boss attack: AoE slam (15 dmg in 3-tile radius) + summon 2 minions
+                foreach (var player in state.GetAlivePlayers())
+                {
+                    var bDx = player.X - enemy.X;
+                    var bDy = player.Y - enemy.Y;
+                    if (bDx * bDx + bDy * bDy <= 9f) // 3 tile radius
+                    {
+                        player.TakeDamage(15);
+                    }
+                }
+                // Summon 2 torch cultist minions near the boss
+                for (int i = 0; i < 2; i++)
+                {
+                    var spawnAngle = _rng.NextSingle() * MathF.PI * 2;
+                    var minionId = $"enemy_minion_{_rng.Next(100000)}";
+                    var minion = new Entity
+                    {
+                        Id = minionId,
+                        Type = EntityType.Enemy,
+                        SubType = "cultist_torch",
+                        X = enemy.X + MathF.Cos(spawnAngle) * 2f,
+                        Y = enemy.Y + MathF.Sin(spawnAngle) * 2f,
+                        Health = 25,
+                        MaxHealth = 25,
+                        Speed = 3f,
+                        IsAlive = true,
+                        IsDirty = true
+                    };
+                    state.AddEntity(minion);
+                    RegisterEnemy(minion);
+                }
+                break;
         }
 
         enemy.IsDirty = true;
     }
 
+    /// <summary>
+    /// Helper to create an enemy projectile aimed at a target player.
+    /// Reduces code duplication for ranged enemy attacks.
+    /// </summary>
+    private void FireEnemyProjectile(GameState state, Entity enemy, Entity target,
+        string subType, int damage, float range, float speed)
+    {
+        var angle = MathF.Atan2(target.Y - enemy.Y, target.X - enemy.X);
+        var proj = new Entity
+        {
+            Id = $"eproj_{_rng.Next(100000)}",
+            Type = EntityType.Projectile,
+            SubType = subType,
+            X = enemy.X + MathF.Cos(angle) * 0.5f,
+            Y = enemy.Y + MathF.Sin(angle) * 0.5f,
+            VelocityX = MathF.Cos(angle) * speed,
+            VelocityY = MathF.Sin(angle) * speed,
+            Damage = damage,
+            Range = range,
+            SourceEntityId = enemy.Id,
+            IsAlive = true,
+            IsDirty = true,
+            Health = 1,
+            MaxHealth = 1
+        };
+        state.AddEntity(proj);
+    }
+
+    /// <summary>
+    /// Determine if an enemy type attacks from range (affects chase/attack distance).
+    /// </summary>
+    private static bool IsRangedEnemy(string? subType) => subType is
+        "cultist_chanter" or "cultist_dagger" or "cultist_shotgun" or "cultist_lightning";
+
     private static int GetAttackCooldown(string? subType) => subType switch
     {
-        "cultist_acolyte" => 20,  // 1s
-        "cultist_chanter" => 30,  // 1.5s
-        "cult_leader" => 40,      // 2s
+        "cultist_acolyte" => 20,    // 1s — basic melee, moderate speed
+        "cultist_torch" => 16,      // 0.8s — slightly faster melee (aggressive)
+        "cultist_chanter" => 30,    // 1.5s — ranged, moderate cooldown
+        "cultist_dagger" => 14,     // 0.7s — fast throwing knives
+        "cultist_shotgun" => 50,    // 2.5s — slow but devastating spread
+        "cultist_lightning" => 60,  // 3s — very slow but high damage
+        "cult_leader" => 40,        // 2s — AoE attack
+        "boss_warehouse" => 80,     // 4s — boss slam + summon (powerful but slow)
         _ => 20
     };
 

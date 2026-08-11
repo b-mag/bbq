@@ -1,3 +1,24 @@
+// =============================================================================
+// WaveSystem.cs — Wave-Based Enemy Spawning
+// =============================================================================
+//
+// WHY WAVES:
+// Waves provide pacing and escalation. Players get breathing room between waves
+// to heal, regroup, and prepare. Each wave introduces harder enemy types so
+// difficulty ramps naturally. The boss on wave 5 provides a climactic finale.
+//
+// SPAWN TIMING:
+// Enemies spawn gradually over ~1 second per batch (not all at once) to prevent
+// frame spikes from creating 20+ entities simultaneously and to give players
+// a chance to react as enemies trickle in from spawn points.
+//
+// ENEMY PROGRESSION:
+//   Wave 1: Easy melee cultists only (learn the controls)
+//   Wave 2: Mix in ranged enemies (learn to use cover)
+//   Wave 3-4: Harder variants, cult leaders appear
+//   Wave 5: Reduced count but tougher + boss spawns mid-wave
+// =============================================================================
+
 namespace Carcosa.Server.Game;
 
 /// <summary>
@@ -80,13 +101,20 @@ public sealed class WaveSystem
 
         if (EnemiesRemaining == 0 && _spawnQueueRemaining == 0 && CurrentWave > 0)
         {
-            if (CurrentWave >= WaveCount)
+            // Temple scenario: endless waves, never complete
+            if (state.Scenario == MapScenario.Temple)
+            {
+                // Brief intermission between endless waves (shorter than Warehouse)
+                state.Phase = GamePhase.WaveIntermission;
+                IntermissionCountdown = IntermissionTicks / 2; // 15 seconds in Temple
+            }
+            else if (CurrentWave >= WaveCount)
             {
                 AllWavesComplete = true;
             }
             else
             {
-                // Start intermission
+                // Start intermission (Warehouse mode)
                 state.Phase = GamePhase.WaveIntermission;
                 IntermissionCountdown = IntermissionTicks;
             }
@@ -150,7 +178,7 @@ public sealed class WaveSystem
     }
 
     /// <summary>
-    /// Spawn the Herald of Hastur (final boss).
+    /// Spawn the final boss entity.
     /// Called during wave 5.
     /// </summary>
     public void SpawnBoss(GameState state)
@@ -165,9 +193,9 @@ public sealed class WaveSystem
 
         var boss = new Entity
         {
-            Id = "enemy_herald",
+            Id = "enemy_boss",
             Type = EntityType.Enemy,
-            SubType = "cult_leader",
+            SubType = "boss_warehouse",
             X = spawnPoint.X,
             Y = spawnPoint.Y,
             Health = 500,
@@ -179,7 +207,7 @@ public sealed class WaveSystem
 
         state.AddEntity(boss);
         _aiSystem.RegisterEnemy(boss);
-        Console.WriteLine("[Wave] The Herald of Hastur has arrived!");
+        Console.WriteLine("[Wave] The Boss has arrived!");
     }
 
     private int GetEnemyCount(int wave) => wave switch
@@ -189,21 +217,57 @@ public sealed class WaveSystem
         3 => 18,
         4 => 24,
         5 => 15, // Fewer but harder + boss
-        _ => 10
+        _ => 8 + wave * 3 // Temple endless mode: scales up each wave
     };
 
     private (string SubType, int Health) GetEnemyType(int wave)
     {
         var roll = _rng.NextSingle();
 
+        // Enemy progression:
+        //   Wave 1-2: Torch cultists (melee) + Dagger throwers (ranged, light)
+        //   Wave 3-4: Add Shotgun cultists (mid-range burst damage)
+        //   Wave 5+:  Add Lightning cultists (high damage, near boss)
+        //   Cult leaders appear from wave 4 onward as mini-bosses
         return wave switch
         {
-            1 => ("cultist_acolyte", 30), // Wave 1: all acolytes
-            2 => roll < 0.7f ? ("cultist_acolyte", 30) : ("cultist_chanter", 50),
-            3 => roll < 0.5f ? ("cultist_acolyte", 35) : ("cultist_chanter", 55),
-            4 => roll < 0.4f ? ("cultist_acolyte", 40) : roll < 0.8f ? ("cultist_chanter", 60) : ("cult_leader", 150),
-            5 => roll < 0.3f ? ("cultist_acolyte", 45) : roll < 0.7f ? ("cultist_chanter", 65) : ("cult_leader", 150),
-            _ => ("cultist_acolyte", 30)
+            1 => roll < 0.6f
+                ? ("cultist_torch", 35)     // Melee torch rushers
+                : ("cultist_dagger", 25),   // Light ranged dagger throwers
+
+            2 => roll < 0.4f
+                ? ("cultist_torch", 40)
+                : roll < 0.8f
+                    ? ("cultist_dagger", 30)
+                    : ("cultist_acolyte", 35),  // Mix in basic acolytes too
+
+            3 => roll < 0.3f
+                ? ("cultist_torch", 45)
+                : roll < 0.6f
+                    ? ("cultist_dagger", 35)
+                    : ("cultist_shotgun", 60),  // Shotgunners appear mid-level
+
+            4 => roll < 0.2f
+                ? ("cultist_torch", 50)
+                : roll < 0.4f
+                    ? ("cultist_dagger", 40)
+                    : roll < 0.7f
+                        ? ("cultist_shotgun", 65)
+                        : roll < 0.9f
+                            ? ("cultist_lightning", 55) // Lightning cultists near boss
+                            : ("cult_leader", 150),     // Mini-boss cult leader
+
+            5 => roll < 0.15f
+                ? ("cultist_torch", 55)
+                : roll < 0.35f
+                    ? ("cultist_shotgun", 70)
+                    : roll < 0.6f
+                        ? ("cultist_lightning", 60)
+                        : roll < 0.85f
+                            ? ("cultist_dagger", 45)
+                            : ("cult_leader", 150),
+
+            _ => ("cultist_torch", 30)
         };
     }
 }

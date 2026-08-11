@@ -1,8 +1,31 @@
+// =============================================================================
+// Pathfinding.cs — A* Grid Pathfinding and Line-of-Sight
+// =============================================================================
+//
+// WHY A* ON A GRID:
+// The game uses a tile-based map, making grid A* the natural fit. Each tile is
+// either walkable or not — no variable-cost terrain weights needed.
+// A* gives optimal shortest paths while being efficient with the MaxSearchNodes
+// limit preventing degenerate cases (e.g., no path exists but we'd search the
+// entire map before discovering that).
+//
+// WHY MaxSearchNodes=500:
+// On an 80x60 map (4800 tiles), most paths between visible entities are short
+// (< 20 tiles). Limiting to 500 explored nodes means even the worst case takes
+// microseconds. If no path is found within 500 nodes, we return empty (the AI
+// falls back to direct movement or idles).
+//
+// WHY LINE-OF-SIGHT CHECK:
+// Used by AI to determine if an enemy can "see" a player (no walls between them).
+// This prevents enemies from chasing through walls. Uses Bresenham's line algorithm
+// which is extremely fast (integer math only, no square roots).
+// =============================================================================
+
 namespace Carcosa.Server.Game;
 
 /// <summary>
-/// Simple A* pathfinding on the tile grid.
-/// Used by AI enemies to navigate toward players.
+/// Simple A* pathfinding on the tile grid and Bresenham line-of-sight checks.
+/// Used by AI enemies to navigate toward players through the map layout.
 /// </summary>
 public static class Pathfinding
 {

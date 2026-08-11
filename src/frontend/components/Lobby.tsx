@@ -66,6 +66,53 @@ export default function Lobby({ sessionInfo, localPlayerId, send }: LobbyProps) 
         Lobby • {sessionInfo.players.length}/{sessionInfo.maxPlayers} players
       </p>
 
+      {/* Scenario Selection (host only can change) */}
+      <div style={{
+        display: 'flex',
+        gap: '0.75rem',
+        justifyContent: 'center',
+      }}>
+        {(['warehouse', 'temple'] as const).map(scenario => {
+          const isSelected = (sessionInfo.scenario || 'warehouse') === scenario;
+          const info = scenario === 'warehouse'
+            ? { name: 'The Warehouse', desc: '5 waves + boss • Win to earn 1000 Cryptol' }
+            : { name: 'The Temple', desc: 'Endless survival • 10 Cryptol per wave' };
+          return (
+            <button
+              key={scenario}
+              onClick={() => isHost && sendAction('select_scenario', scenario)}
+              disabled={!isHost}
+              style={{
+                background: isSelected ? '#3a3020' : '#1a1410',
+                border: `2px solid ${isSelected ? '#c9a84c' : '#4a3d2e'}`,
+                borderRadius: '6px',
+                padding: '0.6rem 1rem',
+                cursor: isHost ? 'pointer' : 'default',
+                textAlign: 'center',
+                opacity: isHost ? 1 : 0.7,
+                minWidth: '160px',
+              }}
+            >
+              <div style={{
+                color: isSelected ? '#c9a84c' : '#9a8b74',
+                fontSize: '0.85rem',
+                fontFamily: 'Georgia, serif',
+                fontWeight: 'bold',
+              }}>
+                {info.name}
+              </div>
+              <div style={{
+                color: isSelected ? '#e8dcc8' : '#6a5d4a',
+                fontSize: '0.6rem',
+                marginTop: '2px',
+              }}>
+                {info.desc}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
       {/* Class Selection */}
       <div style={{
         display: 'flex',

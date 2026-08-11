@@ -1,7 +1,30 @@
 /**
- * Client-side interpolation for smooth entity rendering between server ticks.
- * The server sends state at 20Hz, but we render at 60fps.
- * We interpolate between the last two received states for smooth motion.
+ * =============================================================================
+ * interpolation.ts — Entity Position Interpolation Between Server Ticks
+ * =============================================================================
+ *
+ * WHY INTERPOLATION:
+ * The server sends state at 20Hz (50ms between updates), but we render at 60fps
+ * (16.6ms between frames). Without interpolation, entities would "teleport" to new
+ * positions every 3 frames and sit still in between — creating choppy movement.
+ *
+ * HOW IT WORKS:
+ * When a new server state arrives, we store the entity's current position as "prev"
+ * and the new position as "target". Each render frame, we linearly interpolate (lerp)
+ * between prev and target based on elapsed time since the update. The result is
+ * smooth continuous motion that spans the entire 50ms between server ticks.
+ *
+ * WHY NOT EXTRAPOLATION:
+ * Extrapolation (predicting beyond the last known state using velocity) can cause
+ * entities to overshoot when they stop or turn. Interpolation is always behind by
+ * one tick (~50ms) but is visually smooth and never wrong. At 50ms latency, the
+ * delay is imperceptible.
+ *
+ * LOCAL PLAYER EXCEPTION:
+ * The local player doesn't use interpolation — they use client-side prediction
+ * (from prediction.ts) which provides instant response. Only OTHER players and
+ * enemies use interpolation.
+ * =============================================================================
  */
 
 import { EntityState } from '../messages';

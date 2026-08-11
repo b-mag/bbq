@@ -1,3 +1,22 @@
+// =============================================================================
+// GameFlowSystem.cs — Player Death, Revive, and Game-Over Logic
+// =============================================================================
+//
+// WHY SEPARATE FROM GAMELOOP:
+// Death/revive mechanics are complex enough to warrant their own system:
+//   - Players become "downed" (not permanently dead) — they can be revived
+//   - Reviving requires holding interact near a downed ally for 3 seconds
+//   - Game over only triggers when ALL players are simultaneously downed
+//   - Various events need to be broadcast (death, revive, game over)
+//
+// DESIGN DECISIONS:
+//   - Players are downed, not removed. Their entity persists with IsAlive=false.
+//     This allows revive mechanics and lets the client render death markers.
+//   - Game over checks run every tick (cheap: just iterate players).
+//   - Dead enemies are removed immediately to free memory and reduce entity count.
+//   - Broadcast calls use fire-and-forget (don't block game loop for network I/O).
+// =============================================================================
+
 using Carcosa.Server.Network;
 
 namespace Carcosa.Server.Game;
@@ -161,7 +180,7 @@ public sealed class GameFlowSystem
             {
                 Event = "wave_start",
                 Wave = wave,
-                Message = wave == 5 ? "Final Wave - The Herald Approaches!" : $"Wave {wave}"
+                Message = wave == 5 ? "Final Wave - The Boss Approaches!" : $"Wave {wave}"
             }
         });
     }

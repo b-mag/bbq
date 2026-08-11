@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'CARCOSA - The King in Yellow',
-  description: 'A cooperative top-down RPG set in the world of the King in Yellow',
+  title: 'CARCOSA',
+  description: 'A cooperative top-down RPG',
 };
 
 export default function RootLayout({

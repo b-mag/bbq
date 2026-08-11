@@ -1,16 +1,48 @@
+// =============================================================================
+// MapGenerator.cs — BSP Procedural Map Generation
+// =============================================================================
+//
+// WHY BSP (Binary Space Partitioning):
+// BSP recursively divides the map into regions, places rooms inside leaf regions,
+// then connects adjacent rooms with corridors. This guarantees:
+//   - All rooms are reachable (connected by construction)
+//   - No overlapping rooms (each room is in its own partition)
+//   - Natural layout variety (random split positions + room sizes)
+//   - Good gameplay flow (corridors create chokepoints, rooms create arenas)
+//
+// WHY SEEDED RANDOM:
+// Using a seed makes maps reproducible. All players receive the seed and can
+// verify the map matches. Useful for debugging ("bug happens on seed 12345")
+// and potentially for competitive scenarios (same map layout for fairness).
+//
+// MAP THEME:
+// The current generator creates a 1920s coastal village:
+//   - Rooms = buildings (interior Floor tiles with Wall perimeters)
+//   - Corridors = streets (Cobblestone tiles, 2 tiles wide)
+//   - Doors = connections between buildings and streets
+//   - Bottom edge = shoreline (Sand → Water gradient)
+// =============================================================================
+
 namespace Carcosa.Server.Game;
 
 /// <summary>
-/// Tile types in the game map.
+/// Tile types in the game map. Stored as bytes in the TileMap.Tiles array.
+/// Values must match the frontend's TileType enum (in lib/map.ts).
 /// </summary>
 public enum TileType : byte
 {
-    Floor = 0,       // Interior floor of buildings
-    Wall = 1,        // Impassable walls
-    Door = 2,        // Walkable door connecting building to street
-    Water = 3,       // Impassable shoreline water
-    Cobblestone = 4, // Street/outdoor walkable surface
-    Sand = 5,        // Beach area near water (walkable)
+    /// <summary>Interior floor of buildings (walkable).</summary>
+    Floor = 0,
+    /// <summary>Impassable walls (building perimeters and map edges).</summary>
+    Wall = 1,
+    /// <summary>Walkable door connecting building interior to street.</summary>
+    Door = 2,
+    /// <summary>Impassable shoreline water at map bottom.</summary>
+    Water = 3,
+    /// <summary>Street/outdoor walkable surface between buildings.</summary>
+    Cobblestone = 4,
+    /// <summary>Beach area near water (walkable).</summary>
+    Sand = 5,
 }
 
 /// <summary>
@@ -72,6 +104,89 @@ public static class MapGenerator
             Seed = seed,
             Rooms = rooms.ToArray(),
             SpawnPoints = spawnPoints
+        };
+    }
+
+    /// <summary>
+    /// Generate a Temple-style map: large open arena with scattered pillars.
+    /// Designed for Vampire Survivors-style endless survival gameplay.
+    /// Map is 100x100 tiles — much larger than Warehouse — mostly open floor
+    /// with stone pillars for partial cover and arena edges.
+    /// </summary>
+    public static TileMap GenerateTemple(int width, int height, int seed)
+    {
+        var rng = new Random(seed);
+        var tiles = new byte[width * height];
+
+        // Fill with walls (border)
+        Array.Fill(tiles, (byte)TileType.Wall);
+
+        // Carve out a large central arena (90% of map is open floor)
+        var margin = 3;
+        for (int y = margin; y < height - margin; y++)
+        {
+            for (int x = margin; x < width - margin; x++)
+            {
+                tiles[y * width + x] = (byte)TileType.Floor;
+            }
+        }
+
+        // Add scattered stone pillars (2x2 walls) for partial cover
+        var pillarCount = (width * height) / 200; // ~50 pillars on a 100x100 map
+        var rooms = new List<Room>();
+        for (int i = 0; i < pillarCount; i++)
+        {
+            var px = rng.Next(margin + 3, width - margin - 4);
+            var py = rng.Next(margin + 3, height - margin - 4);
+
+            // 2x2 pillar
+            for (int dy = 0; dy < 2; dy++)
+                for (int dx = 0; dx < 2; dx++)
+                    tiles[(py + dy) * width + (px + dx)] = (byte)TileType.Wall;
+        }
+
+        // Add some cobblestone paths crossing the arena for visual variety
+        for (int i = 0; i < 4; i++)
+        {
+            var isHorizontal = rng.Next(2) == 0;
+            var pos = rng.Next(margin + 5, (isHorizontal ? height : width) - margin - 5);
+
+            for (int j = margin; j < (isHorizontal ? width : height) - margin; j++)
+            {
+                var idx = isHorizontal ? pos * width + j : j * width + pos;
+                if (tiles[idx] == (byte)TileType.Floor)
+                    tiles[idx] = (byte)TileType.Cobblestone;
+                // Also the adjacent tile for 2-wide paths
+                var idx2 = isHorizontal ? (pos + 1) * width + j : j * width + (pos + 1);
+                if (idx2 < tiles.Length && tiles[idx2] == (byte)TileType.Floor)
+                    tiles[idx2] = (byte)TileType.Cobblestone;
+            }
+        }
+
+        // Spawn points: scattered around the arena edges (enemies come from the perimeter)
+        var spawnPoints = new List<SpawnPoint>();
+        for (int i = 0; i < 12; i++)
+        {
+            var edge = rng.Next(4); // 0=top, 1=bottom, 2=left, 3=right
+            int sx, sy;
+            switch (edge)
+            {
+                case 0: sx = rng.Next(margin + 2, width - margin - 2); sy = margin + 2; break;
+                case 1: sx = rng.Next(margin + 2, width - margin - 2); sy = height - margin - 3; break;
+                case 2: sx = margin + 2; sy = rng.Next(margin + 2, height - margin - 2); break;
+                default: sx = width - margin - 3; sy = rng.Next(margin + 2, height - margin - 2); break;
+            }
+            spawnPoints.Add(new SpawnPoint(sx, sy, SpawnPointType.Street));
+        }
+
+        return new TileMap
+        {
+            Width = width,
+            Height = height,
+            Tiles = tiles,
+            Seed = seed,
+            Rooms = rooms.ToArray(),
+            SpawnPoints = spawnPoints.ToArray()
         };
     }
 

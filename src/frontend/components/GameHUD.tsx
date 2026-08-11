@@ -1,6 +1,45 @@
+/**
+ * =============================================================================
+ * GameHUD.tsx — In-Game Heads-Up Display
+ * =============================================================================
+ *
+ * WHY THIS LAYOUT:
+ * The HUD uses CSS Grid to create a classic RPG layout:
+ *   - Left panel: character stats, wave info, controls reference
+ *   - Center: game canvas (passed as children)
+ *   - Right panel: party health bars, chat log, pre-defined chat messages
+ *   - Bottom bar: ability slots with hotkey labels
+ *
+ * PRE-DEFINED CHAT:
+ * Instead of free-text chat, players select from 11 pre-defined messages.
+ * This is opened with Enter key and messages are selected with number keys
+ * (1-9, 0 for 10, - for 11) or by clicking. This keeps communication
+ * family-friendly, fast during combat, and eliminates moderation needs.
+ * =============================================================================
+ */
 'use client';
 
+import { useState, useEffect, useCallback } from 'react';
 import { EntityState, SessionInfoPayload, GameEventPayload } from '@/lib/messages';
+
+/**
+ * The 11 pre-defined chat messages available to players.
+ * These cover the essential communication needs for cooperative gameplay:
+ * status updates, tactical callouts, and social basics.
+ */
+export const PREDEFINED_MESSAGES = [
+  'Hello',
+  'Yes',
+  'No',
+  'Hold on afk for a moment',
+  'Alright back',
+  'You take the lead',
+  'Lets pull them one at a time',
+  'Is everyone ok?',
+  'Wait here',
+  "I'm low on ammo",
+  "I'm hurt",
+] as const;
 
 interface GameHUDProps {
   localPlayerId: string | null;
@@ -9,12 +48,17 @@ interface GameHUDProps {
   events: GameEventPayload[];
   latency: number;
   chatMessages: string[];
-  chatInput: string;
-  onChatInputChange: (val: string) => void;
-  onChatSend: () => void;
+  /** Called when the player selects a pre-defined message to send. */
+  onChatSend: (message: string) => void;
+  /** Called when chat selector is open (disables game input). */
   onChatFocus: () => void;
+  /** Called when chat selector closes (re-enables game input). */
   onChatBlur: () => void;
   onDisconnect: () => void;
+  /** Whether the player is currently spectating (dead, watching teammates). */
+  isSpectating?: boolean;
+  /** Name/class of the player being spectated. */
+  spectateTargetName?: string;
   children: React.ReactNode; // The game canvas
 }
 
@@ -25,18 +69,72 @@ export default function GameHUD({
   events,
   latency,
   chatMessages,
-  chatInput,
-  onChatInputChange,
   onChatSend,
   onChatFocus,
   onChatBlur,
   onDisconnect,
+  isSpectating = false,
+  spectateTargetName,
   children,
 }: GameHUDProps) {
   const localEntity = entities.find(e => e.id === `player_${localPlayerId}`);
   const playerEntities = entities.filter(e => e.entityType === 'player');
   const enemyCount = entities.filter(e => e.entityType === 'enemy').length;
   const currentWave = sessionInfo?.currentWave ?? 0;
+
+  // Chat selector open state — toggled by Enter key
+  const [chatOpen, setChatOpen] = useState(false);
+
+  // Handle keyboard shortcuts for chat
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in an input element
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      // Enter toggles the chat selector
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        setChatOpen(prev => {
+          const next = !prev;
+          if (next) onChatFocus();
+          else onChatBlur();
+          return next;
+        });
+        return;
+      }
+
+      // Number keys select a message when chat is open
+      if (chatOpen) {
+        let index = -1;
+        if (e.key >= '1' && e.key <= '9') {
+          index = parseInt(e.key) - 1;
+        } else if (e.key === '0') {
+          index = 9; // 0 = 10th message
+        } else if (e.key === '-') {
+          index = 10; // - = 11th message
+        } else if (e.key === 'Escape') {
+          setChatOpen(false);
+          onChatBlur();
+          return;
+        }
+
+        if (index >= 0 && index < PREDEFINED_MESSAGES.length) {
+          onChatSend(PREDEFINED_MESSAGES[index]);
+          setChatOpen(false);
+          onChatBlur();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [chatOpen, onChatSend, onChatFocus, onChatBlur]);
+
+  const handleMessageClick = (message: string) => {
+    onChatSend(message);
+    setChatOpen(false);
+    onChatBlur();
+  };
 
   return (
     <div style={{
@@ -105,6 +203,21 @@ export default function GameHUD({
               }}>
                 {localEntity.isAlive ? 'Active' : 'DOWNED - Need Revive!'}
               </div>
+              {/* Med Kits */}
+              {localEntity.medKits > 0 && (
+                <div style={{
+                  color: '#e8dcc8',
+                  fontSize: '0.65rem',
+                  marginTop: '0.3rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.3rem',
+                }}>
+                  <span style={{ color: '#4a8c3f' }}>+</span>
+                  Med Kits: {localEntity.medKits}
+                  <span style={{ color: '#6a5d4a', fontSize: '0.55rem' }}>[H]</span>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -129,6 +242,7 @@ export default function GameHUD({
           <div>Click/Space — Attack</div>
           <div>E — Special Ability</div>
           <div>F — Revive Ally</div>
+          <div>H — Use Med Kit</div>
           <div>Enter — Chat</div>
         </div>
 
@@ -169,6 +283,36 @@ export default function GameHUD({
         {children}
         {/* Game event overlay */}
         <GameEventOverlay events={events} />
+        {/* Spectate mode overlay */}
+        {isSpectating && (
+          <div style={{
+            position: 'absolute',
+            bottom: '10px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'rgba(26, 20, 16, 0.85)',
+            border: '1px solid #4a3d2e',
+            borderRadius: '4px',
+            padding: '6px 16px',
+            color: '#c9a84c',
+            fontSize: '0.8rem',
+            fontFamily: 'Georgia, serif',
+            textAlign: 'center',
+            pointerEvents: 'none',
+          }}>
+            SPECTATING: {spectateTargetName || 'Teammate'}
+            <div style={{ color: '#6a5d4a', fontSize: '0.6rem', marginTop: '2px' }}>
+              Press Tab to cycle
+            </div>
+          </div>
+        )}
+        {/* Chat selector overlay (shown when Enter is pressed) */}
+        {chatOpen && (
+          <ChatSelector
+            onSelect={handleMessageClick}
+            onClose={() => { setChatOpen(false); onChatBlur(); }}
+          />
+        )}
       </div>
 
       {/* Bottom Bar — Abilities */}
@@ -292,26 +436,15 @@ export default function GameHUD({
               </div>
             ))}
           </div>
-          <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.3rem' }}>
-            <input
-              type="text"
-              placeholder="..."
-              value={chatInput}
-              onChange={(e) => onChatInputChange(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && onChatSend()}
-              onFocus={onChatFocus}
-              onBlur={onChatBlur}
-              style={{
-                flex: 1,
-                background: '#0d0a07',
-                border: '1px solid #4a3d2e',
-                borderRadius: '3px',
-                padding: '3px 5px',
-                color: '#e8dcc8',
-                fontSize: '0.65rem',
-                outline: 'none',
-              }}
-            />
+          {/* Quick chat hint */}
+          <div style={{
+            marginTop: '0.3rem',
+            fontSize: '0.6rem',
+            color: '#6a5d4a',
+            textAlign: 'center',
+            fontStyle: 'italic',
+          }}>
+            Press Enter to chat
           </div>
         </div>
       </div>
@@ -319,8 +452,100 @@ export default function GameHUD({
   );
 }
 
-// --- Sub-components ---
+// =============================================================================
+// Sub-components
+// =============================================================================
 
+/**
+ * Chat message selector overlay — appears centered over the game canvas when
+ * the player presses Enter. Shows all 11 pre-defined messages with number key
+ * shortcuts for quick selection during combat.
+ */
+function ChatSelector({ onSelect, onClose }: {
+  onSelect: (message: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        background: 'rgba(26, 20, 16, 0.95)',
+        border: '1px solid #4a3d2e',
+        borderRadius: '8px',
+        padding: '0.75rem',
+        minWidth: '280px',
+        zIndex: 100,
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div style={{
+        color: '#c9a84c',
+        fontSize: '0.75rem',
+        marginBottom: '0.5rem',
+        textAlign: 'center',
+        fontFamily: 'Georgia, serif',
+      }}>
+        Quick Chat
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        {PREDEFINED_MESSAGES.map((msg, i) => {
+          // Hotkey label: 1-9, 0, -
+          const hotkey = i < 9 ? `${i + 1}` : i === 9 ? '0' : '-';
+          return (
+            <button
+              key={i}
+              onClick={() => onSelect(msg)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                background: '#2a2218',
+                border: '1px solid #3a3020',
+                borderRadius: '3px',
+                padding: '4px 8px',
+                cursor: 'pointer',
+                textAlign: 'left',
+                width: '100%',
+                transition: 'border-color 0.15s',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#c9a84c')}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = '#3a3020')}
+            >
+              <span style={{
+                color: '#c9a84c',
+                fontSize: '0.6rem',
+                fontFamily: 'monospace',
+                minWidth: '16px',
+                textAlign: 'center',
+              }}>
+                [{hotkey}]
+              </span>
+              <span style={{ color: '#e8dcc8', fontSize: '0.7rem' }}>
+                {msg}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{
+        color: '#6a5d4a',
+        fontSize: '0.6rem',
+        marginTop: '0.5rem',
+        textAlign: 'center',
+      }}>
+        Press number to send · Esc to close
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Ability slot display in the bottom bar.
+ * Shows the ability name and hotkey for each class's abilities.
+ */
 function AbilitySlot({ label, hotkey, className, type }: {
   label: string;
   hotkey: string;
@@ -340,10 +565,10 @@ function AbilitySlot({ label, hotkey, className, type }: {
     if (type === 'secondary') {
       switch (className) {
         case 'surgeon': return 'Group Heal';
-        default: return '—';
+        default: return '\u2014';
       }
     }
-    return '—';
+    return '\u2014';
   };
 
   return (
@@ -361,8 +586,11 @@ function AbilitySlot({ label, hotkey, className, type }: {
   );
 }
 
+/**
+ * Floating event overlay shown at the top center of the game canvas.
+ * Displays wave announcements, victory/defeat messages, etc.
+ */
 function GameEventOverlay({ events }: { events: GameEventPayload[] }) {
-  // Show the most recent game events as floating text
   const recentEvents = events.slice(-3);
 
   if (recentEvents.length === 0) return null;

@@ -1,3 +1,28 @@
+/**
+ * =============================================================================
+ * useGameInput.ts — Input Capture, Prediction, and Server Sync Hook
+ * =============================================================================
+ *
+ * WHY THIS HOOK EXISTS:
+ * This hook bridges the gap between browser input events and the game server:
+ *   - Captures keyboard/mouse state via InputHandler
+ *   - Applies client-side prediction for instant movement feedback
+ *   - Sends inputs to the server at 20Hz (matching server tick rate)
+ *   - Provides reconciliation interface for server state corrections
+ *
+ * WHY 20Hz INPUT LOOP (not per-keypress):
+ * Sending every keydown/keyup would flood the server with irregular messages.
+ * Instead, we sample the input state at the server's tick rate (20Hz) and send
+ * one consolidated message per tick: "here's what I'm doing right now."
+ * This matches the server's processing cadence perfectly.
+ *
+ * LIFECYCLE:
+ *   - When 'active' becomes true: attach keyboard/mouse listeners, start 20Hz loop
+ *   - Each tick: read input state → predict locally → send to server
+ *   - When server confirms: reconcile predicted position with authoritative state
+ *   - When 'active' becomes false: detach listeners, stop loop (e.g., chat focused)
+ * =============================================================================
+ */
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
@@ -13,6 +38,8 @@ export interface UseGameInputOptions {
   map: GameMap | null;
   /** Whether input should be active */
   active: boolean;
+  /** Optional callback fired when the player fires (for visual effects). */
+  onFire?: (x: number, y: number, angle: number, classType: string) => void;
 }
 
 export interface UseGameInputReturn {
@@ -32,7 +59,7 @@ export interface UseGameInputReturn {
  * Hook that manages keyboard input, client prediction, and sending inputs to server.
  * Runs an input sampling loop at the server tick rate (20Hz) to send inputs.
  */
-export function useGameInput({ send, map, active }: UseGameInputOptions): UseGameInputReturn {
+export function useGameInput({ send, map, active, onFire }: UseGameInputOptions): UseGameInputReturn {
   const inputHandlerRef = useRef<InputHandler>(new InputHandler());
   const predictionRef = useRef<ClientPrediction>(new ClientPrediction());
   const inputLoopRef = useRef<NodeJS.Timeout | null>(null);
@@ -81,11 +108,12 @@ export function useGameInput({ send, map, active }: UseGameInputOptions): UseGam
             primaryFire: inputState.primaryFire,
             secondaryAbility: inputState.secondaryAbility,
             interact: inputState.interact,
+            useMedKit: inputState.useMedKit,
             aimAngle: inputState.aimAngle,
             timestamp: predictedInput.timestamp,
           },
         } as GameMessage);
-      } else if (inputState.primaryFire || inputState.secondaryAbility || inputState.interact) {
+      } else if (inputState.primaryFire || inputState.secondaryAbility || inputState.interact || inputState.useMedKit) {
         // Send action-only input (no movement but has an action)
         send({
           type: MessageTypes.PlayerInput,
@@ -96,10 +124,17 @@ export function useGameInput({ send, map, active }: UseGameInputOptions): UseGam
             primaryFire: inputState.primaryFire,
             secondaryAbility: inputState.secondaryAbility,
             interact: inputState.interact,
+            useMedKit: inputState.useMedKit,
             aimAngle: inputState.aimAngle,
             timestamp: Date.now(),
           },
         } as GameMessage);
+      }
+
+      // Trigger visual effect callback when firing (for muzzle flash / slash arc)
+      if (inputState.primaryFire && onFire) {
+        const pos = prediction;
+        onFire(pos.x, pos.y, inputState.aimAngle, '');
       }
     }, 50); // 20Hz
 

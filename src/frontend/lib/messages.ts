@@ -1,9 +1,27 @@
 /**
- * Game message protocol types — mirrors the server-side message definitions.
- * All WebSocket communication uses the GameMessage envelope with a "type" discriminator.
+ * =============================================================================
+ * messages.ts — Game Network Protocol Types (Client Mirror of Server Messages.cs)
+ * =============================================================================
+ *
+ * WHY MIRROR THE SERVER:
+ * This file defines the exact same message types as the server's Messages.cs.
+ * Both sides must agree on the JSON structure for WebSocket communication.
+ * Any change to message shapes must be made in BOTH files simultaneously.
+ *
+ * WHY NOT CODE GENERATION:
+ * With only ~15 message types, manual mirroring is simpler than setting up a
+ * code generator (protobuf, typespec, etc.). The AOT requirement on the server
+ * makes most code-gen tools incompatible anyway.
+ *
+ * NAMING CONVENTION:
+ * Server uses PascalCase (C# convention), but serializes to camelCase via
+ * JsonSerializerOptions. TypeScript natively uses camelCase, so the types here
+ * match the wire format directly.
+ * =============================================================================
  */
 
 // --- Message type constants ---
+// Must match MessageTypes in the server's Messages.cs exactly.
 export const MessageTypes = {
   PlayerJoined: 'player_joined',
   PlayerLeft: 'player_left',
@@ -41,6 +59,7 @@ export interface PlayerInputPayload {
   primaryFire: boolean;
   secondaryAbility: boolean;
   interact: boolean;
+  useMedKit: boolean;
   aimAngle: number;
   timestamp: number;
 }
@@ -62,6 +81,7 @@ export interface EntityState {
   maxHealth: number;
   subType?: string;
   isAlive: boolean;
+  medKits: number;
 }
 
 export interface ChatMessagePayload {
@@ -78,6 +98,7 @@ export interface SessionInfoPayload {
   players: PlayerInfo[];
   maxPlayers: number;
   currentWave: number;
+  scenario: 'warehouse' | 'temple';
 }
 
 export interface PlayerInfo {
@@ -110,7 +131,7 @@ export interface MapDataPayload {
 }
 
 export interface SessionActionPayload {
-  action: 'select_class' | 'set_ready' | 'start_game' | 'return_to_lobby';
+  action: 'select_class' | 'set_ready' | 'start_game' | 'return_to_lobby' | 'select_scenario';
   value?: string;
 }
 

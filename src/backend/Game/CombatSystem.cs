@@ -1,38 +1,69 @@
+// =============================================================================
+// CombatSystem.cs — Weapon and Ability Processing
+// =============================================================================
+//
+// WHY STATIC CLASS:
+// CombatSystem is stateless — it reads entity state, creates projectiles, and
+// applies damage. No instance data is needed. Static avoids unnecessary allocation
+// and makes the API clear: pass in what you need, get the result.
+//
+// WHY SEPARATE FROM GAMELOOP:
+// Extracting combat logic into its own file keeps GameLoop.cs focused on the
+// tick pipeline orchestration. Each system file handles one concern.
+//
+// CLASS BALANCE PHILOSOPHY:
+//   - Gangster: High volume, low damage per bullet. Area denial. Spray and pray.
+//   - Detective: Low fire rate, high single-shot damage. Rewards precise aim.
+//   - Surgeon: Melee damage + team healing. High risk, high reward support.
+// All three are viable solo but synergize in co-op (suppression + burst + sustain).
+//
+// PROJECTILE MODEL:
+// Weapons create projectile entities that move independently each tick.
+// This means bullets have travel time (not hitscan), which creates gameplay depth
+// (leading targets, dodging) and looks better with visible bullet animations.
+// =============================================================================
+
 namespace Carcosa.Server.Game;
 
 /// <summary>
 /// Handles combat actions: firing weapons, creating projectiles, and using abilities.
-/// Each class has different weapon characteristics.
+/// Each player class has different weapon characteristics tuned for its role.
+/// 
+/// WHY STATIC: No instance state needed. All data comes from the Entity being processed
+/// and the GameState. This also avoids DI registration and lifetime management.
 /// </summary>
 public static class CombatSystem
 {
     // --- Class weapon stats (all in game units) ---
+    // WHY CONSTANTS: Tuning values live here for easy balance adjustments.
+    // All timing values are in ticks (1 tick = 50ms at 20Hz).
+    // All distances are in tiles (1 tile = 24px on client at default zoom).
 
-    // Gangster: Tommy Gun
+    // Gangster: Tommy Gun — spray fire, high volume, low per-bullet damage
     private const int GangsterDamage = 2;
-    private const float GangsterRange = 15f;
-    private const int GangsterFireCooldownTicks = 2; // Very fast (every 100ms)
-    private const float GangsterSpread = 0.52f; // ~30 degrees in radians
-    private const float GangsterAccuracy = 0.4f;
-    private const int GangsterBulletsPerBurst = 3;
+    private const float GangsterRange = 15f;          // tiles
+    private const int GangsterFireCooldownTicks = 2;  // 100ms between bursts (very fast)
+    private const float GangsterSpread = 0.52f;       // ~30 degrees cone in radians
+    private const float GangsterAccuracy = 0.4f;      // 40% of shots are perfectly aimed
+    private const int GangsterBulletsPerBurst = 3;    // 3 bullets per click
     private const float GangsterProjectileSpeed = 0.6f; // tiles per tick
 
-    // Detective: Magnum
+    // Detective: Magnum — single precise shot, high damage, long cooldown
     private const int DetectiveDamage = 25;
-    private const float DetectiveRange = 20f;
-    private const int DetectiveFireCooldownTicks = 30; // 1.5s at 20 ticks/sec
-    private const float DetectiveAccuracy = 0.9f;
-    private const float DetectiveProjectileSpeed = 0.8f;
+    private const float DetectiveRange = 20f;         // tiles (longest range)
+    private const int DetectiveFireCooldownTicks = 30; // 1.5s between shots
+    private const float DetectiveAccuracy = 0.9f;     // 90% accuracy (very precise)
+    private const float DetectiveProjectileSpeed = 0.8f; // tiles per tick (fastest bullet)
 
-    // Surgeon: Dagger (melee)
+    // Surgeon: Dagger — instant melee hit, no projectile created
     private const int SurgeonMeleeDamage = 8;
-    private const float SurgeonMeleeRange = 1.5f;
-    private const int SurgeonFireCooldownTicks = 8; // 400ms
+    private const float SurgeonMeleeRange = 1.5f;     // tiles (must be adjacent)
+    private const int SurgeonFireCooldownTicks = 8;   // 400ms between swings
 
-    // Surgeon: Group Heal (secondary ability)
-    private const int SurgeonHealAmount = 15;
-    private const float SurgeonHealRadius = 5f;
-    private const int SurgeonHealCooldownTicks = 200; // 10s at 20 ticks/sec
+    // Surgeon: Group Heal (secondary ability) — heals all nearby allies
+    private const int SurgeonHealAmount = 15;         // HP restored per target
+    private const float SurgeonHealRadius = 5f;       // tiles (generous radius)
+    private const int SurgeonHealCooldownTicks = 200; // 10s cooldown (powerful ability)
 
     private static int _projectileCounter;
 

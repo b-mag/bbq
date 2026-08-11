@@ -1,15 +1,45 @@
+// =============================================================================
+// SessionManager.cs — Game Session Lifecycle Management
+// =============================================================================
+//
+// WHY SESSION MANAGER:
+// The session lifecycle (lobby → playing → game over → lobby) is separate from
+// the game loop because:
+//   - Lobby state (class selection, ready status) doesn't need tick-based updates
+//   - Session transitions are event-driven (player actions), not time-driven
+//   - The session manager handles concerns the game loop doesn't (host assignment,
+//     player counts, starting conditions)
+//
+// PEER-HOSTED MODEL:
+// The first player to connect becomes the host. Only the host can start the game.
+// If the host disconnects, the next player becomes the new host. This avoids
+// needing a separate matchmaking step for casual play — just share your IP.
+//
+// THREAD SAFETY:
+// Session methods are called from WebSocket handler threads (via Program.cs message
+// routing). The _lock object serializes access to session state to prevent races
+// (e.g., two players readying up simultaneously, or disconnect during game start).
+// =============================================================================
+
 using Carcosa.Server.Network;
+using Carcosa.Server.Cryptol;
 
 namespace Carcosa.Server.Game;
 
 /// <summary>
 /// Manages the game session lifecycle: lobby, class selection, game start, game over.
 /// Peer-hosted model: the first player to connect becomes the host.
+/// 
+/// WHY LOCK INSTEAD OF ConcurrentDictionary: Session operations often need to
+/// read multiple values and make decisions atomically (e.g., "are all players ready?
+/// if so, start"). ConcurrentDictionary only provides per-key atomicity. A lock
+/// gives us transaction-like semantics for multi-step operations.
 /// </summary>
 public sealed class SessionManager
 {
     private readonly ConnectionManager _connectionManager;
     private readonly GameLoop _gameLoop;
+    private readonly CryptolStore? _cryptolStore;
     private readonly Dictionary<string, PlayerSession> _players = new();
     private readonly object _lock = new();
 
@@ -17,11 +47,16 @@ public sealed class SessionManager
     public string? HostId { get; private set; }
     public SessionState State { get; private set; } = SessionState.Lobby;
     public int MaxPlayers { get; set; } = 8;
+    /// <summary>Selected scenario for this session. Set by host in lobby.</summary>
+    public MapScenario SelectedScenario { get; private set; } = MapScenario.Warehouse;
+    /// <summary>Player ID of the invader (if one has joined). Null if no invader.</summary>
+    public string? InvaderId { get; private set; }
 
-    public SessionManager(ConnectionManager connectionManager, GameLoop gameLoop)
+    public SessionManager(ConnectionManager connectionManager, GameLoop gameLoop, CryptolStore? cryptolStore = null)
     {
         _connectionManager = connectionManager;
         _gameLoop = gameLoop;
+        _cryptolStore = cryptolStore;
     }
 
     /// <summary>
@@ -145,11 +180,16 @@ public sealed class SessionManager
             State = SessionState.Playing;
             Console.WriteLine($"[Session] Game starting with {readyPlayers.Count} players!");
 
-            // Generate map
+            // Generate map based on selected scenario
             var seed = Random.Shared.Next();
-            _gameLoop.State.Map = MapGenerator.Generate(80, 60, seed);
+            _gameLoop.State.Scenario = SelectedScenario;
+            _gameLoop.State.Map = SelectedScenario switch
+            {
+                MapScenario.Temple => MapGenerator.GenerateTemple(100, 100, seed),
+                _ => MapGenerator.Generate(80, 60, seed) // Warehouse (default)
+            };
             _gameLoop.State.Phase = GamePhase.Playing;
-            Console.WriteLine($"[Map] Generated map with seed {seed}");
+            Console.WriteLine($"[Map] Generated {SelectedScenario} map with seed {seed}");
 
             // Send map to all players
             var mapMessage = new GameMessage
@@ -188,6 +228,52 @@ public sealed class SessionManager
     }
 
     /// <summary>
+    /// Allow a player to join the active game as an invader (PvP hostile).
+    /// Only one invader per session. Must be mid-game (playing state).
+    /// </summary>
+    public void TryJoinAsInvader(string playerId)
+    {
+        lock (_lock)
+        {
+            // Must be in a playing game
+            if (State != SessionState.Playing) return;
+
+            // Only one invader allowed
+            if (InvaderId != null) return;
+
+            // Player must be in the session
+            if (!_players.TryGetValue(playerId, out var player)) return;
+
+            InvaderId = playerId;
+            Console.WriteLine($"[Session] {player.PlayerName} joined as INVADER!");
+
+            // Spawn the invader entity in the game
+            if (_gameLoop.State.Map != null)
+            {
+                var (spawnX, spawnY) = _gameLoop.State.Map.FindPlayerSpawn(Random.Shared);
+                var entity = _gameLoop.AddPlayer(playerId, player.PlayerName, "invader", spawnX, spawnY);
+                entity.IsInvader = true;
+                entity.Health = 150; // Invaders are slightly tankier
+                entity.MaxHealth = 150;
+                entity.MedKits = 0;
+            }
+
+            // Notify all players
+            _ = _connectionManager.BroadcastAsync(new GameMessage
+            {
+                Type = MessageTypes.GameEvent,
+                GameEvent = new GameEventPayload
+                {
+                    Event = "invader_joined",
+                    Message = $"An INVADER has joined the fight!"
+                }
+            });
+
+            BroadcastSessionInfo();
+        }
+    }
+
+    /// <summary>
     /// End the game (victory or defeat).
     /// </summary>
     public void EndGame(bool victory)
@@ -197,6 +283,42 @@ public sealed class SessionManager
             State = victory ? SessionState.Victory : SessionState.GameOver;
             _gameLoop.State.Phase = victory ? GamePhase.Victory : GamePhase.GameOver;
             Console.WriteLine($"[Session] Game ended: {(victory ? "VICTORY" : "DEFEAT")}");
+
+            // Award Cryptol to all connected players
+            // Warehouse Victory (boss defeated, at least 1 survivor): 1000 Cryptol each
+            // Warehouse Defeat (all players died): 10 Cryptol each (consolation)
+            // Temple (always defeat — endless mode): 10 Cryptol per wave survived
+            int amount;
+            if (_gameLoop.State.Scenario == MapScenario.Temple)
+            {
+                amount = _gameLoop.State.CurrentWave * 10; // 10 per wave survived
+            }
+            else
+            {
+                amount = victory ? 1000 : 10;
+            }
+            var playerIds = _players.Keys.ToList();
+
+            if (_cryptolStore != null && playerIds.Count > 0)
+            {
+                _cryptolStore.AwardCryptolBatch(playerIds, amount);
+                Console.WriteLine($"[Cryptol] Awarded {amount} Cryptol to {playerIds.Count} players");
+
+                // Broadcast the Cryptol award event to all players
+                _ = _connectionManager.BroadcastAsync(new GameMessage
+                {
+                    Type = MessageTypes.GameEvent,
+                    GameEvent = new GameEventPayload
+                    {
+                        Event = "cryptol_award",
+                        Amount = amount,
+                        Message = victory
+                            ? $"Victory! +{amount} Cryptol"
+                            : $"+{amount} Cryptol (stayed connected)"
+                    }
+                });
+            }
+
             BroadcastSessionInfo();
         }
     }
@@ -251,6 +373,21 @@ public sealed class SessionManager
                     if (playerId == HostId)
                         ResetToLobby();
                     break;
+                case "select_scenario":
+                    if (playerId == HostId && State == SessionState.Lobby)
+                    {
+                        SelectedScenario = message.SessionAction.Value switch
+                        {
+                            "temple" => MapScenario.Temple,
+                            _ => MapScenario.Warehouse
+                        };
+                        Console.WriteLine($"[Session] Scenario set to {SelectedScenario}");
+                        BroadcastSessionInfo();
+                    }
+                    break;
+                case "join_as_invader":
+                    TryJoinAsInvader(playerId);
+                    break;
             }
         }
     }
@@ -283,7 +420,8 @@ public sealed class SessionManager
                     IsHost = p.IsHost
                 }).ToArray(),
                 MaxPlayers = MaxPlayers,
-                CurrentWave = _gameLoop.State.CurrentWave
+                CurrentWave = _gameLoop.State.CurrentWave,
+                Scenario = SelectedScenario == MapScenario.Temple ? "temple" : "warehouse"
             };
         }
     }

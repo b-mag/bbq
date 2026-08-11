@@ -1,3 +1,28 @@
+/**
+ * =============================================================================
+ * map.ts — Client-Side Tile Map Utilities
+ * =============================================================================
+ *
+ * WHY CLIENT-SIDE MAP:
+ * The server sends the entire tile map once at game start (base64 encoded).
+ * The client decodes it into a Uint8Array and uses it for:
+ *   - Rendering tiles (each byte maps to a color via TILE_COLORS)
+ *   - Client-side prediction collision checks (movement prediction needs to
+ *     know where walls are without asking the server)
+ *
+ * WHY DUPLICATE COLLISION LOGIC:
+ * The isWalkableF() function here mirrors TileMap.IsWalkableF() on the server.
+ * Both use the same 4-corner bounding box check with the same 0.3 tile radius.
+ * This is critical for prediction accuracy — if the client and server disagree
+ * on what's walkable, the player will experience rubber-banding.
+ *
+ * TILE COLORS:
+ * The color palette is intentionally dark and muted (1920s noir aesthetic).
+ * Walls are nearly black, floors are dark wood, streets are gray-brown.
+ * Water gets a subtle animated shimmer effect in the renderer.
+ * =============================================================================
+ */
+
 import { MapDataPayload } from './messages';
 
 /**

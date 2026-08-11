@@ -1,3 +1,28 @@
+/**
+ * =============================================================================
+ * useWebSocket.ts — WebSocket Connection Lifecycle Hook
+ * =============================================================================
+ *
+ * WHY A CUSTOM HOOK:
+ * WebSocket management involves complex lifecycle (connect, receive, disconnect,
+ * reconnect) that shouldn't live in a component. This hook encapsulates:
+ *   - Connection URL construction (ws/wss based on page protocol)
+ *   - Auto-reconnect with exponential backoff
+ *   - Latency measurement via ping/pong every 5 seconds
+ *   - Player ID extraction from the first PlayerJoined message
+ *   - Message handler subscription/unsubscription pattern
+ *
+ * WHY NOT A LIBRARY (socket.io, etc.):
+ * The server uses raw WebSockets (required for AOT). Socket.io adds its own
+ * protocol layer on top which we'd have to implement server-side. Raw WebSocket
+ * on both sides keeps things simple and eliminates a dependency.
+ *
+ * RECONNECTION STRATEGY:
+ * On disconnect, attempt reconnection up to 5 times with a 2-second delay.
+ * This handles brief network blips without requiring the player to manually
+ * reconnect. If all attempts fail, the user must click "Connect" again.
+ * =============================================================================
+ */
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';

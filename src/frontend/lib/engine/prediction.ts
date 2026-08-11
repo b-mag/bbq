@@ -1,16 +1,37 @@
 /**
- * Client-side prediction and server reconciliation.
+ * =============================================================================
+ * prediction.ts — Client-Side Prediction and Server Reconciliation
+ * =============================================================================
  *
- * How it works:
- * 1. Client immediately applies movement locally (prediction)
- * 2. Client sends input to server with a sequence number
- * 3. Client stores each predicted input in a buffer
- * 4. When server confirms (sends back lastProcessedInput), client:
- *    - Removes all inputs up to that sequence from the buffer
- *    - Snaps to server position
- *    - Re-applies any unconfirmed inputs still in the buffer
+ * WHY CLIENT-SIDE PREDICTION:
+ * Without prediction, player movement would have a round-trip delay (50-200ms)
+ * before appearing on screen. This feels extremely sluggish. Prediction applies
+ * movement LOCALLY and immediately, making the game feel responsive regardless
+ * of network latency.
  *
- * This gives instant response while maintaining server authority.
+ * HOW RECONCILIATION WORKS:
+ *   1. Client sends input to server with a sequence number
+ *   2. Client immediately applies that movement locally (prediction)
+ *   3. Client stores the input in a pending buffer
+ *   4. Server processes the input and sends back state + lastProcessedInput
+ *   5. Client receives server confirmation:
+ *      a. Removes all inputs with sequence <= lastProcessedInput from buffer
+ *      b. Snaps position to server's authoritative position
+ *      c. Re-applies all remaining unconfirmed inputs from the buffer
+ *   6. If server and client agree, re-applying gives the same position = no jitter
+ *   7. If they disagree (e.g., server blocked movement), client snaps to correct pos
+ *
+ * WHY RE-APPLY UNCONFIRMED INPUTS:
+ * Between sending an input and receiving confirmation, the client may have sent
+ * 2-4 more inputs (at 20Hz with 100ms RTT). After snapping to server position,
+ * those unconfirmed inputs need to be replayed so the client doesn't "jump back"
+ * to the confirmed position and then "jump forward" again.
+ *
+ * SPEED CONSTANTS:
+ * PLAYER_SPEED and TICK_DURATION must match the server exactly (5 tiles/sec, 50ms/tick).
+ * Any mismatch causes prediction drift that reconciliation must constantly correct,
+ * resulting in visible jitter.
+ * =============================================================================
  */
 
 import { GameMap, isWalkableF } from '../map';

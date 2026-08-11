@@ -5,6 +5,7 @@ import { useWebSocket } from '@/hooks/useWebSocket';
 import { useGameInput } from '@/hooks/useGameInput';
 import { GameMessage, MessageTypes, EntityState, SessionInfoPayload, GameEventPayload, createMessage } from '@/lib/messages';
 import { GameMap, decodeMap } from '@/lib/map';
+import { VisualEffectsSystem } from '@/lib/engine/effects';
 import GameCanvas from '@/components/GameCanvas';
 import GameHUD from '@/components/GameHUD';
 import Lobby from '@/components/Lobby';
@@ -12,13 +13,18 @@ import Lobby from '@/components/Lobby';
 export default function Home() {
   const [playerName, setPlayerName] = useState('');
   const [messages, setMessages] = useState<string[]>([]);
-  const [chatInput, setChatInput] = useState('');
   const [gameMap, setGameMap] = useState<GameMap | null>(null);
   const [entities, setEntities] = useState<EntityState[]>([]);
   const [inGame, setInGame] = useState(false);
   const [chatFocused, setChatFocused] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<SessionInfoPayload | null>(null);
   const [gameEvents, setGameEvents] = useState<GameEventPayload[]>([]);
+  const effectsSystemRef = useRef<VisualEffectsSystem | null>(null);
+
+  // Spectate state — activated when local player dies
+  const [isSpectating, setIsSpectating] = useState(false);
+  const [spectateTargetId, setSpectateTargetId] = useState<string | null>(null);
+  const deathTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const ws = useWebSocket({
     playerName: playerName || 'Anonymous',
@@ -29,7 +35,23 @@ export default function Home() {
   const gameInput = useGameInput({
     send: ws.send,
     map: gameMap,
-    active: inGame && ws.status === 'connected' && !chatFocused,
+    active: inGame && ws.status === 'connected' && !chatFocused && !isSpectating,
+    onFire: useCallback((x: number, y: number, angle: number) => {
+      const fx = effectsSystemRef.current;
+      if (!fx) return;
+      // Determine player class from entities to pick the right effect
+      const localEntity = entities.find(e => e.id === `player_${ws.playerId}`);
+      const playerClass = localEntity?.subType || '';
+      if (playerClass === 'surgeon') {
+        // Surgeon: show slash arc (melee weapon)
+        fx.addSlashArc(x, y, angle);
+      } else {
+        // Gangster/Detective: show muzzle flash (ranged weapon)
+        const flashX = x + Math.cos(angle) * 0.4;
+        const flashY = y + Math.sin(angle) * 0.4;
+        fx.addMuzzleFlash(flashX, flashY, angle, '#ffc832', playerClass === 'detective' ? 1.5 : 0.8);
+      }
+    }, [entities, ws.playerId]),
   });
 
   const addLog = useCallback((msg: string) => {
@@ -113,6 +135,15 @@ export default function Home() {
             if (message.gameEvent.message) {
               addLog(message.gameEvent.message);
             }
+            // Trigger visual effects based on event type
+            const fx = effectsSystemRef.current;
+            if (fx && message.gameEvent.x !== undefined && message.gameEvent.y !== undefined) {
+              const evt = message.gameEvent;
+              if (evt.event === 'damage' && evt.x && evt.y) {
+                // Impact spark at damage location
+                fx.addImpactSpark(evt.x, evt.y);
+              }
+            }
             // Auto-clear events after 4 seconds
             setTimeout(() => {
               setGameEvents(prev => prev.slice(1));
@@ -136,6 +167,61 @@ export default function Home() {
     }
   }, [ws.playerId, entities.length > 0]); // Only run when first entities arrive
 
+  // Detect local player death → start spectate timer
+  useEffect(() => {
+    if (!ws.playerId || !inGame) return;
+    const localEntity = entities.find(e => e.id === `player_${ws.playerId}`);
+    if (!localEntity) return;
+
+    if (!localEntity.isAlive && !isSpectating && !deathTimerRef.current) {
+      // Player just died — wait 3 seconds then enter spectate mode
+      deathTimerRef.current = setTimeout(() => {
+        // Find first alive teammate to spectate
+        const aliveTeammates = entities.filter(
+          e => e.entityType === 'player' && e.isAlive && e.id !== `player_${ws.playerId}`
+        );
+        if (aliveTeammates.length > 0) {
+          setSpectateTargetId(aliveTeammates[0].id);
+          setIsSpectating(true);
+        }
+        deathTimerRef.current = null;
+      }, 3000);
+    }
+
+    // If player is revived, cancel spectate
+    if (localEntity.isAlive && (isSpectating || deathTimerRef.current)) {
+      if (deathTimerRef.current) {
+        clearTimeout(deathTimerRef.current);
+        deathTimerRef.current = null;
+      }
+      setIsSpectating(false);
+      setSpectateTargetId(null);
+    }
+  }, [entities, ws.playerId, inGame, isSpectating]);
+
+  // Tab key cycles spectate target between alive teammates
+  useEffect(() => {
+    if (!isSpectating) return;
+
+    const handleTab = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const aliveTeammates = entities.filter(
+          e => e.entityType === 'player' && e.isAlive && e.id !== `player_${ws.playerId}`
+        );
+        if (aliveTeammates.length === 0) return;
+
+        // Find current target index and cycle to next
+        const currentIndex = aliveTeammates.findIndex(e => e.id === spectateTargetId);
+        const nextIndex = (currentIndex + 1) % aliveTeammates.length;
+        setSpectateTargetId(aliveTeammates[nextIndex].id);
+      }
+    };
+
+    window.addEventListener('keydown', handleTab);
+    return () => window.removeEventListener('keydown', handleTab);
+  }, [isSpectating, entities, spectateTargetId, ws.playerId]);
+
   const handleConnect = () => {
     if (!playerName.trim()) return;
     ws.connect();
@@ -147,19 +233,24 @@ export default function Home() {
     setGameMap(null);
     setEntities([]);
     setSessionInfo(null);
+    setIsSpectating(false);
+    setSpectateTargetId(null);
+    if (deathTimerRef.current) {
+      clearTimeout(deathTimerRef.current);
+      deathTimerRef.current = null;
+    }
   };
 
-  const handleSendChat = () => {
-    if (!chatInput.trim() || !ws.playerId) return;
+  const handleSendChat = (message: string) => {
+    if (!message.trim() || !ws.playerId) return;
     const msg = createMessage(MessageTypes.Chat, {
       senderId: ws.playerId,
       senderName: playerName,
-      message: chatInput,
+      message: message,
       timestamp: Date.now(),
     });
     ws.send(msg);
-    addLog(`You: ${chatInput}`);
-    setChatInput('');
+    addLog(`You: ${message}`);
   };
 
   // If in lobby, show the lobby UI
@@ -177,20 +268,27 @@ export default function Home() {
         events={gameEvents}
         latency={ws.latency}
         chatMessages={messages}
-        chatInput={chatInput}
-        onChatInputChange={setChatInput}
         onChatSend={handleSendChat}
         onChatFocus={() => setChatFocused(true)}
         onChatBlur={() => setChatFocused(false)}
         onDisconnect={handleDisconnect}
+        isSpectating={isSpectating}
+        spectateTargetName={
+          spectateTargetId
+            ? entities.find(e => e.id === spectateTargetId)?.subType || 'Teammate'
+            : undefined
+        }
       >
         <GameCanvas
           map={gameMap}
           entities={entities}
           localPlayerId={ws.playerId}
+          spectateTargetId={spectateTargetId}
           width={800}
           height={600}
           tileSize={24}
+          onCanvasReady={(canvas) => gameInput.inputHandler.setCanvas(canvas)}
+          onEffectsReady={(fx) => { effectsSystemRef.current = fx; }}
         />
       </GameHUD>
     );
@@ -219,7 +317,7 @@ export default function Home() {
         CARCOSA
       </h1>
       <p style={{ color: '#9a8b74', fontStyle: 'italic' }}>
-        The King in Yellow
+        Cooperative Survival RPG
       </p>
 
       <div style={{
@@ -283,8 +381,21 @@ export default function Home() {
       </div>
 
       <p style={{ fontSize: '0.8rem', color: '#6a5d4a', fontStyle: 'italic' }}>
-        Along the shore the cloud waves break...
+        Cooperative Survival RPG
       </p>
+
+      <div style={{
+        marginTop: '0.5rem',
+        padding: '0.5rem 1rem',
+        border: '1px solid #3a3020',
+        borderRadius: '4px',
+        background: 'rgba(42, 34, 24, 0.5)',
+        textAlign: 'center',
+      }}>
+        <span style={{ color: '#6a5d4a', fontSize: '0.7rem', fontStyle: 'italic' }}>
+          Coming soon: Scenario &mdash; Carcosa
+        </span>
+      </div>
     </main>
   );
 }

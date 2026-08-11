@@ -36,15 +36,23 @@ export default function P2POverlay({ status, shard, glyph, onGlyphConnect }: P2P
       try {
         const res = await fetch('/api/p2p/admin-messages');
         if (res.ok) {
-          const data = await res.json();
-          // The endpoint currently just returns tracker status
-          // Admin messages will come through when the tracker relays them
+          const data: Array<{ messageId: string; message: string; priority: string; durationSeconds: number; timestamp: number }> = await res.json();
+          if (data.length > 0) {
+            // Show the most recent message
+            const latest = data[data.length - 1];
+            if (latest.message !== adminMessage) {
+              setAdminMessage(latest.message);
+              // Auto-dismiss after duration
+              setTimeout(() => setAdminMessage(null), (latest.durationSeconds || 15) * 1000);
+            }
+          }
         }
       } catch { /* Best effort */ }
     };
     const interval = setInterval(poll, 5000);
+    poll();
     return () => clearInterval(interval);
-  }, []);
+  }, [adminMessage]);
 
   const handleGlyphConnect = async () => {
     if (!glyphInput.trim()) return;

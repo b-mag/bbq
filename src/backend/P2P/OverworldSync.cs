@@ -108,6 +108,14 @@ public sealed class OverworldSync
     private PeerValidator? _validator;
     private Task? _broadcastTask;
 
+    // Chat message buffer (recent messages for frontend polling)
+    private readonly List<ChatMessageEntry> _chatMessages = new();
+    private readonly object _chatLock = new();
+
+    // Admin message buffer
+    private readonly List<AdminMessageEntry> _adminMessages = new();
+    private readonly object _adminLock = new();
+
     // Local player state (written by game input, read by broadcast timer)
     private float _localX;
     private float _localY;
@@ -267,6 +275,14 @@ public sealed class OverworldSync
         {
             case PeerMessageTypes.StateUpdate when message.StateUpdate != null:
                 ApplyRemoteState(message.StateUpdate);
+                break;
+
+            case PeerMessageTypes.ChatRelay when message.ChatRelay != null:
+                HandleIncomingChat(message.ChatRelay);
+                break;
+
+            case PeerMessageTypes.AdminBroadcast when message.AdminBroadcast != null:
+                HandleIncomingAdmin(message.AdminBroadcast);
                 break;
 
             // Keepalive handling
@@ -438,4 +454,179 @@ public sealed class OverworldSync
             Console.WriteLine($"[P2P:Sync] Pruned stale remote player: {id}");
         }
     }
+
+    // =========================================================================
+    // CHAT SYSTEM
+    // =========================================================================
+
+    /// <summary>
+    /// Send a chat message to all mesh peers (called by the local frontend).
+    /// </summary>
+    public async Task SendChatAsync(string channel, string text)
+    {
+        var messageId = Guid.NewGuid().ToString("N")[..8];
+
+        var chatRelay = new PeerMessage
+        {
+            Type = PeerMessageTypes.ChatRelay,
+            ChatRelay = new PeerChatRelayPayload
+            {
+                MessageId = messageId,
+                Channel = channel,
+                SenderId = _localIdentity.PeerId,
+                SenderName = _localIdentity.DisplayName,
+                Text = text,
+                SenderX = _localX,
+                SenderY = _localY,
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            }
+        };
+
+        // Broadcast to all peers
+        await _mesh.BroadcastAsync(chatRelay);
+
+        // Also store locally so the sender sees their own message
+        StoreChat(new ChatMessageEntry
+        {
+            MessageId = messageId,
+            Channel = channel,
+            SenderId = _localIdentity.PeerId,
+            SenderName = _localIdentity.DisplayName,
+            Text = text,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+    }
+
+    /// <summary>
+    /// Handle a chat message received from a remote peer.
+    /// </summary>
+    private void HandleIncomingChat(PeerChatRelayPayload chat)
+    {
+        // Check for "nearby" channel — only store if sender is within range
+        if (chat.Channel == "nearby")
+        {
+            var dx = chat.SenderX - _localX;
+            var dy = chat.SenderY - _localY;
+            var dist = MathF.Sqrt(dx * dx + dy * dy);
+            if (dist > 15f) return; // Too far for nearby chat
+        }
+
+        StoreChat(new ChatMessageEntry
+        {
+            MessageId = chat.MessageId,
+            Channel = chat.Channel,
+            SenderId = chat.SenderId,
+            SenderName = chat.SenderName,
+            Text = chat.Text,
+            Timestamp = chat.Timestamp,
+        });
+    }
+
+    /// <summary>
+    /// Store a chat message in the buffer (for frontend polling).
+    /// </summary>
+    private void StoreChat(ChatMessageEntry entry)
+    {
+        lock (_chatLock)
+        {
+            _chatMessages.Add(entry);
+            // Keep only last 100 messages
+            if (_chatMessages.Count > 100)
+                _chatMessages.RemoveRange(0, _chatMessages.Count - 100);
+        }
+    }
+
+    /// <summary>
+    /// Get recent chat messages (for frontend polling).
+    /// </summary>
+    /// <param name="sinceTimestamp">Only return messages after this timestamp (0 for all).</param>
+    public List<ChatMessageEntry> GetRecentChat(long sinceTimestamp = 0)
+    {
+        lock (_chatLock)
+        {
+            if (sinceTimestamp == 0)
+                return _chatMessages.TakeLast(50).ToList();
+            return _chatMessages.Where(m => m.Timestamp > sinceTimestamp).ToList();
+        }
+    }
+
+    // =========================================================================
+    // ADMIN MESSAGES
+    // =========================================================================
+
+    /// <summary>
+    /// Handle an admin broadcast received from a peer (relayed from tracker).
+    /// </summary>
+    private void HandleIncomingAdmin(PeerAdminBroadcastPayload admin)
+    {
+        StoreAdmin(new AdminMessageEntry
+        {
+            MessageId = admin.MessageId,
+            Message = admin.Message,
+            Priority = admin.Priority,
+            DurationSeconds = admin.DurationSeconds,
+            Timestamp = admin.Timestamp,
+        });
+    }
+
+    /// <summary>
+    /// Store an admin message from the TrackerClient directly.
+    /// </summary>
+    public void AddAdminMessage(string messageId, string message, string priority, int duration, long timestamp)
+    {
+        StoreAdmin(new AdminMessageEntry
+        {
+            MessageId = messageId,
+            Message = message,
+            Priority = priority,
+            DurationSeconds = duration,
+            Timestamp = timestamp,
+        });
+    }
+
+    private void StoreAdmin(AdminMessageEntry entry)
+    {
+        lock (_adminLock)
+        {
+            _adminMessages.Add(entry);
+            if (_adminMessages.Count > 20)
+                _adminMessages.RemoveRange(0, _adminMessages.Count - 20);
+        }
+    }
+
+    /// <summary>
+    /// Get recent admin messages (for frontend display).
+    /// </summary>
+    public List<AdminMessageEntry> GetAdminMessages()
+    {
+        lock (_adminLock)
+        {
+            return _adminMessages.ToList();
+        }
+    }
+}
+
+// =============================================================================
+// CHAT & ADMIN MESSAGE ENTRY TYPES
+// =============================================================================
+
+/// <summary>A stored chat message for frontend polling.</summary>
+public sealed class ChatMessageEntry
+{
+    public required string MessageId { get; init; }
+    public required string Channel { get; init; }
+    public required string SenderId { get; init; }
+    public required string SenderName { get; init; }
+    public required string Text { get; init; }
+    public long Timestamp { get; set; }
+}
+
+/// <summary>A stored admin broadcast message for frontend display.</summary>
+public sealed class AdminMessageEntry
+{
+    public required string MessageId { get; init; }
+    public required string Message { get; init; }
+    public string Priority { get; set; } = "info";
+    public int DurationSeconds { get; set; } = 15;
+    public long Timestamp { get; set; }
 }

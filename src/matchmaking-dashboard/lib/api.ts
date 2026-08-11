@@ -102,6 +102,7 @@ export interface OverworldStats {
 
 /**
  * Fetch overworld-specific data for the dashboard.
+ * In P2P mode, players register via the tracker — not via WebSocket.
  */
 export async function fetchOverworldData(): Promise<{
   players: OverworldPlayerInfo[];
@@ -109,23 +110,38 @@ export async function fetchOverworldData(): Promise<{
   stats: OverworldStats | null;
 } | null> {
   try {
-    const [playersRes, partiesRes, statsRes] = await Promise.allSettled([
-      fetch(`${API_BASE}/api/overworld/players`),
+    const [peersRes, partiesRes, statsRes] = await Promise.allSettled([
+      fetch(`${API_BASE}/api/tracker/peers`),
       fetch(`${API_BASE}/api/overworld/parties`),
       fetch(`${API_BASE}/api/overworld/stats`),
     ]);
 
-    const players: OverworldPlayerInfo[] = playersRes.status === 'fulfilled' && playersRes.value.ok
-      ? await playersRes.value.json()
-      : [];
+    // Map tracker peers to overworld player format
+    let players: OverworldPlayerInfo[] = [];
+    if (peersRes.status === 'fulfilled' && peersRes.value.ok) {
+      const trackerPeers: Array<{ peerId: string; displayName: string; address: string; worldId: string; playerCount: number }> = await peersRes.value.json();
+      players = trackerPeers.map(p => ({
+        id: p.peerId,
+        name: p.displayName || p.peerId,
+        x: 0,
+        y: 0,
+        status: 'exploring',
+        partyId: undefined,
+      }));
+    }
 
     const parties: OverworldPartyInfo[] = partiesRes.status === 'fulfilled' && partiesRes.value.ok
       ? await partiesRes.value.json()
       : [];
 
-    const stats: OverworldStats | null = statsRes.status === 'fulfilled' && statsRes.value.ok
-      ? await statsRes.value.json()
-      : null;
+    // Build stats from tracker data
+    const stats: OverworldStats = {
+      totalConnected: players.length,
+      inOverworld: players.length,
+      inDungeon: 0,
+      inParties: 0,
+      totalParties: parties.length,
+    };
 
     return { players, parties, stats };
   } catch {

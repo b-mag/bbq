@@ -247,6 +247,10 @@ _ = Task.Run(async () =>
 
 // Start tracker client (optional peer discovery via matchmaking service)
 var trackerClient = app.Services.GetRequiredService<TrackerClient>();
+trackerClient.OnAdminMessage += (admin) =>
+{
+    overworldSync.AddAdminMessage(admin.MessageId, admin.Message, admin.Priority, admin.DurationSeconds, admin.Timestamp);
+};
 trackerClient.Start();
 
 // Check matchmaking service connectivity — polls every 5 seconds.
@@ -551,6 +555,17 @@ app.MapPost("/api/p2p/position", (P2PPositionUpdate update, OverworldSync sync) 
     return Results.Ok();
 });
 
+// Set the local player's display name (called by frontend after entering name)
+app.MapPost("/api/p2p/name", (P2PNameRequest request, PeerIdentity identity) =>
+{
+    if (!string.IsNullOrWhiteSpace(request.Name))
+    {
+        identity.DisplayName = request.Name.Trim();
+        Console.WriteLine($"[P2P:API] Player name set to: {identity.DisplayName}");
+    }
+    return Results.Ok();
+});
+
 // --- DEBUG: Log what /api/p2p/players is returning ---
 app.MapGet("/api/p2p/debug", (OverworldSync sync, PeerIdentity identity, PeerMesh mesh) =>
 {
@@ -607,9 +622,33 @@ app.MapPost("/api/p2p/glyph/connect", async (GlyphConnectRequest request, PeerMe
 });
 
 // Get recent admin broadcast messages (for frontend display)
-app.MapGet("/api/p2p/admin-messages", (TrackerClient tracker) =>
+app.MapGet("/api/p2p/admin-messages", (OverworldSync sync) =>
 {
-    return Results.Ok(new P2PAdminStatusResponse(tracker.IsTrackerOnline));
+    var messages = sync.GetAdminMessages().Select(m => new P2PAdminMessageResponse(
+        m.MessageId, m.Message, m.Priority, m.DurationSeconds, m.Timestamp)).ToArray();
+    return Results.Ok(messages);
+});
+
+// --- P2P Chat API ---
+
+// Send a chat message (broadcast to all mesh peers)
+app.MapPost("/api/p2p/chat", async (P2PChatRequest request, OverworldSync sync) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Text))
+        return Results.BadRequest(new P2PErrorResponse("Message text is required"));
+
+    await sync.SendChatAsync(request.Channel ?? "global", request.Text.Trim());
+    return Results.Ok();
+});
+
+// Get recent chat messages (frontend polls this)
+app.MapGet("/api/p2p/chat/messages", (OverworldSync sync, HttpContext ctx) =>
+{
+    var sinceStr = ctx.Request.Query["since"].FirstOrDefault();
+    var since = long.TryParse(sinceStr, out var s) ? s : 0;
+    var messages = sync.GetRecentChat(since).Select(m => new P2PChatMessageResponse(
+        m.MessageId, m.Channel, m.SenderId, m.SenderName, m.Text, m.Timestamp)).ToArray();
+    return Results.Ok(messages);
 });
 
 // Get world shard info (current shard, capacity, player count)
@@ -889,9 +928,13 @@ internal record P2PGlyphResponse(string Glyph, string WorldId, string Address);
 internal record P2PMessageResponse(string Message, string Address);
 internal record P2PErrorResponse(string Error);
 internal record P2PAdminStatusResponse(bool TrackerOnline);
+internal record P2PAdminMessageResponse(string MessageId, string Message, string Priority, int DurationSeconds, long Timestamp);
+internal record P2PChatRequest(string? Channel, string Text);
+internal record P2PChatMessageResponse(string MessageId, string Channel, string SenderId, string SenderName, string Text, long Timestamp);
 internal record P2PShardResponse(
     string ShardId, byte ShardIndex, int PlayerCount, int MaxPlayers, bool IsAtCapacity);
 internal record P2PPositionUpdate(float X, float Y, float VelocityX, float VelocityY);
+internal record P2PNameRequest(string Name);
 
 /// <summary>
 /// Source-generated JSON context for HTTP API response types.
@@ -914,8 +957,14 @@ internal record P2PPositionUpdate(float X, float Y, float VelocityX, float Veloc
 [JsonSerializable(typeof(P2PMessageResponse))]
 [JsonSerializable(typeof(P2PErrorResponse))]
 [JsonSerializable(typeof(P2PAdminStatusResponse))]
+[JsonSerializable(typeof(P2PAdminMessageResponse))]
+[JsonSerializable(typeof(P2PAdminMessageResponse[]))]
+[JsonSerializable(typeof(P2PChatRequest))]
+[JsonSerializable(typeof(P2PChatMessageResponse))]
+[JsonSerializable(typeof(P2PChatMessageResponse[]))]
 [JsonSerializable(typeof(P2PShardResponse))]
 [JsonSerializable(typeof(P2PPositionUpdate))]
+[JsonSerializable(typeof(P2PNameRequest))]
 [JsonSerializable(typeof(List<AvailableSession>))]
 [JsonSerializable(typeof(AvailableSession))]
 internal partial class AppJsonContext : JsonSerializerContext

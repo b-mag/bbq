@@ -13,7 +13,6 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { OverworldMessage, OwMessageTypes, OwChatMessagePayload } from '@/lib/overworld-messages';
 
 interface ChatMessage {
   channel: 'global' | 'nearby' | 'party';
@@ -24,10 +23,8 @@ interface ChatMessage {
 }
 
 interface OverworldChatProps {
-  send: (msg: OverworldMessage) => void;
-  playerId: string | null;
-  playerName: string;
-  onMessage: (handler: (msg: OverworldMessage) => void) => () => void;
+  /** Whether the chat input is currently focused (exposed to parent for input gating) */
+  onFocusChange?: (focused: boolean) => void;
 }
 
 const CHANNEL_COLORS = {
@@ -42,30 +39,40 @@ const CHANNEL_LABELS = {
   party: '[P]',
 };
 
-export default function OverworldChat({ send, playerId, playerName, onMessage }: OverworldChatProps) {
+export default function OverworldChat({ onFocusChange }: OverworldChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [activeChannel, setActiveChannel] = useState<'global' | 'nearby' | 'party'>('global');
   const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lastTimestampRef = useRef<number>(0);
 
-  // Listen for incoming chat messages
+  // Poll for new chat messages from local server (P2P relay)
   useEffect(() => {
-    const unsub = onMessage((msg: OverworldMessage) => {
-      if (msg.type === OwMessageTypes.ChatMessage && msg.chatMessage) {
-        const cm = msg.chatMessage;
-        setMessages(prev => [...prev.slice(-49), {
-          channel: cm.channel as 'global' | 'nearby' | 'party',
-          senderId: cm.senderId,
-          senderName: cm.senderName,
-          text: cm.text,
-          timestamp: cm.timestamp,
-        }]);
-      }
-    });
-    return unsub;
-  }, [onMessage]);
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/p2p/chat/messages?since=${lastTimestampRef.current}`);
+        if (res.ok) {
+          const data: Array<{ messageId: string; channel: string; senderId: string; senderName: string; text: string; timestamp: number }> = await res.json();
+          if (data.length > 0) {
+            const newMsgs: ChatMessage[] = data.map(m => ({
+              channel: m.channel as 'global' | 'nearby' | 'party',
+              senderId: m.senderId,
+              senderName: m.senderName,
+              text: m.text,
+              timestamp: m.timestamp,
+            }));
+            setMessages(prev => [...prev.slice(-49), ...newMsgs]);
+            lastTimestampRef.current = data[data.length - 1].timestamp;
+          }
+        }
+      } catch { /* Best effort */ }
+    };
+    const interval = setInterval(poll, 500); // Poll at 2Hz
+    poll(); // Initial load
+    return () => clearInterval(interval);
+  }, []);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -88,7 +95,7 @@ export default function OverworldChat({ send, playerId, playerName, onMessage }:
   }, [isFocused]);
 
   const handleSend = useCallback(() => {
-    if (!inputText.trim() || !playerId) return;
+    if (!inputText.trim()) return;
 
     let text = inputText.trim();
     let channel = activeChannel;
@@ -100,19 +107,15 @@ export default function OverworldChat({ send, playerId, playerName, onMessage }:
 
     if (!text) return;
 
-    send({
-      type: OwMessageTypes.ChatMessage,
-      chatMessage: {
-        channel,
-        senderId: playerId,
-        senderName: playerName,
-        text,
-        timestamp: Date.now(),
-      },
-    });
+    // POST to local server — it broadcasts via P2P mesh
+    fetch('/api/p2p/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel, text }),
+    }).catch(() => { /* Best effort */ });
 
     setInputText('');
-  }, [inputText, activeChannel, playerId, playerName, send]);
+  }, [inputText, activeChannel]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -122,11 +125,13 @@ export default function OverworldChat({ send, playerId, playerName, onMessage }:
       } else {
         inputRef.current?.blur();
         setIsFocused(false);
+        onFocusChange?.(false);
       }
     }
     if (e.key === 'Escape') {
       inputRef.current?.blur();
       setIsFocused(false);
+      onFocusChange?.(false);
     }
     // Tab cycles channels
     if (e.key === 'Tab') {
@@ -135,6 +140,8 @@ export default function OverworldChat({ send, playerId, playerName, onMessage }:
       const idx = channels.indexOf(activeChannel);
       setActiveChannel(channels[(idx + 1) % channels.length]);
     }
+    // Stop propagation so WASD doesn't trigger movement
+    e.stopPropagation();
   };
 
   return (
@@ -155,7 +162,7 @@ export default function OverworldChat({ send, playerId, playerName, onMessage }:
             <span style={{ color: CHANNEL_COLORS[msg.channel], fontWeight: 'bold', fontSize: '0.65rem' }}>
               {CHANNEL_LABELS[msg.channel]}
             </span>{' '}
-            <span style={{ color: msg.senderId === playerId ? '#c9a84c' : '#9a9080' }}>
+            <span style={{ color: '#9a9080' }}>
               {msg.senderName}:
             </span>{' '}
             <span style={{ color: CHANNEL_COLORS[msg.channel] }}>{msg.text}</span>
@@ -191,8 +198,8 @@ export default function OverworldChat({ send, playerId, playerName, onMessage }:
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={handleKeyDown}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
+          onFocus={() => { setIsFocused(true); onFocusChange?.(true); }}
+          onBlur={() => { setIsFocused(false); onFocusChange?.(false); }}
           placeholder={`${activeChannel} chat...`}
           maxLength={200}
           style={{

@@ -35,6 +35,7 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
   const [party, setParty] = useState<OwPartyUpdatePayload | null>(null);
   const [nearbyEntrance, setNearbyEntrance] = useState<OwDungeonEntranceData | null>(null);
   const [pendingInvite, setPendingInvite] = useState<{ partyId: string; inviterName: string } | null>(null);
+  const [chatFocused, setChatFocused] = useState(false);
 
   const playersRef = useRef<Map<string, OwPlayerState>>(new Map());
 
@@ -46,13 +47,21 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
   const input = useOverworldInput({
     send: ws.send,
     map,
-    active: ws.status === 'connected' || map !== null, // Active once map is loaded (P2P mode)
+    active: (ws.status === 'connected' || map !== null) && !chatFocused,
     worldObjects,
   });
 
   // Load overworld map from local server REST API (P2P mode)
   useEffect(() => {
     if (map) return; // Already loaded
+
+    // Set player name on local server so it gets broadcast to peers
+    fetch('/api/p2p/name', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: playerName }),
+    }).catch(() => {});
+
     const loadMap = async () => {
       try {
         const res = await fetch('/api/p2p/map');
@@ -340,10 +349,7 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
 
       {/* Chat */}
       <OverworldChat
-        send={ws.send}
-        playerId={ws.playerId}
-        playerName={playerName}
-        onMessage={ws.onMessage}
+        onFocusChange={(focused) => setChatFocused(focused)}
       />
 
       {/* Bottom-left: Controls hint */}

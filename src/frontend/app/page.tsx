@@ -26,6 +26,41 @@ export default function Home() {
   const [spectateTargetId, setSpectateTargetId] = useState<string | null>(null);
   const deathTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Online mode — detected by checking matchmaking service availability
+  const [isOnline, setIsOnline] = useState(false);
+  const [availableSessions, setAvailableSessions] = useState<Array<{
+    sessionId: string; hostAddress: string; playerCount: number;
+    maxPlayers: number; state: string; scenario: string; currentWave: number;
+  }>>([]);
+  const [showSessionBrowser, setShowSessionBrowser] = useState(false);
+
+  // Check if matchmaking service is available (polls every 5 seconds)
+  useEffect(() => {
+    const check = () => {
+      fetch('/api/matchmaking-status')
+        .then(res => res.json())
+        .then((data: { isOnline: boolean }) => setIsOnline(data.isOnline))
+        .catch(() => setIsOnline(false));
+    };
+    check();
+    const interval = setInterval(check, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch available sessions when session browser is opened
+  useEffect(() => {
+    if (!showSessionBrowser) return;
+    const load = () => {
+      fetch('/api/available-sessions')
+        .then(res => res.json())
+        .then(setAvailableSessions)
+        .catch(() => setAvailableSessions([]));
+    };
+    load();
+    const interval = setInterval(load, 3000); // Refresh every 3s
+    return () => clearInterval(interval);
+  }, [showSessionBrowser]);
+
   const ws = useWebSocket({
     playerName: playerName || 'Anonymous',
     autoReconnect: true,
@@ -289,6 +324,7 @@ export default function Home() {
           tileSize={24}
           onCanvasReady={(canvas) => gameInput.inputHandler.setCanvas(canvas)}
           onEffectsReady={(fx) => { effectsSystemRef.current = fx; }}
+          inputHandler={gameInput.inputHandler}
         />
       </GameHUD>
     );
@@ -344,6 +380,27 @@ export default function Home() {
           </span>
         </div>
 
+        {/* Matchmaking status indicator */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.4rem',
+          padding: '0.3rem 0.6rem',
+          borderRadius: '4px',
+          background: isOnline ? 'rgba(74, 140, 63, 0.1)' : 'rgba(106, 93, 74, 0.1)',
+          border: `1px solid ${isOnline ? 'rgba(74, 140, 63, 0.3)' : 'rgba(106, 93, 74, 0.3)'}`,
+        }}>
+          <div style={{
+            width: '6px',
+            height: '6px',
+            borderRadius: '50%',
+            background: isOnline ? '#4a8c3f' : '#6a5d4a',
+          }} />
+          <span style={{ fontSize: '0.7rem', color: isOnline ? '#4a8c3f' : '#6a5d4a' }}>
+            {isOnline ? 'Online — Multiplayer available' : 'Offline — Standalone mode'}
+          </span>
+        </div>
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           <input
             type="text"
@@ -379,6 +436,120 @@ export default function Home() {
           </button>
         </div>
       </div>
+
+      {/* Join a Game button (only shown when matchmaking is online) */}
+      {isOnline && (
+        <button
+          onClick={() => setShowSessionBrowser(true)}
+          style={{
+            background: '#2a3a2a',
+            border: '1px solid #4a8c3f',
+            borderRadius: '4px',
+            padding: '0.6rem 1.5rem',
+            color: '#4a8c3f',
+            cursor: 'pointer',
+            fontSize: '0.9rem',
+            fontFamily: 'Georgia, serif',
+            width: '100%',
+            maxWidth: '400px',
+          }}
+        >
+          Join a Game
+        </button>
+      )}
+
+      {/* Session browser modal */}
+      {showSessionBrowser && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+        }} onClick={() => setShowSessionBrowser(false)}>
+          <div onClick={(e) => e.stopPropagation()} style={{
+            background: '#1a1410',
+            border: '1px solid #4a3d2e',
+            borderRadius: '8px',
+            padding: '1.5rem',
+            width: '500px',
+            maxHeight: '400px',
+            overflow: 'auto',
+          }}>
+            <h2 style={{ color: '#c9a84c', fontSize: '1.1rem', marginBottom: '1rem', fontFamily: 'Georgia, serif' }}>
+              Available Games
+            </h2>
+            {availableSessions.length === 0 ? (
+              <p style={{ color: '#6a5d4a', textAlign: 'center', padding: '2rem 0' }}>
+                No games found. Try hosting your own!
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {availableSessions.filter(s => s.playerCount < s.maxPlayers).map(session => (
+                  <div key={session.sessionId} style={{
+                    background: '#2a2218',
+                    border: '1px solid #4a3d2e',
+                    borderRadius: '4px',
+                    padding: '0.75rem',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => {
+                    // Connect to the remote session's host
+                    // For now, open in a new tab pointing at the host
+                    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+                    window.open(`${protocol}//${session.hostAddress}`, '_blank');
+                    setShowSessionBrowser(false);
+                  }}
+                  >
+                    <div>
+                      <div style={{ color: '#e8dcc8', fontSize: '0.85rem' }}>
+                        {session.scenario.charAt(0).toUpperCase() + session.scenario.slice(1)}
+                        <span style={{
+                          marginLeft: '0.5rem',
+                          padding: '1px 6px',
+                          borderRadius: '8px',
+                          fontSize: '0.65rem',
+                          background: session.state === 'lobby' ? 'rgba(201, 168, 76, 0.2)' : 'rgba(74, 140, 63, 0.2)',
+                          color: session.state === 'lobby' ? '#c9a84c' : '#4a8c3f',
+                        }}>
+                          {session.state}
+                        </span>
+                      </div>
+                      <div style={{ color: '#6a5d4a', fontSize: '0.7rem', marginTop: '2px' }}>
+                        {session.hostAddress} • Wave {session.currentWave || '—'}
+                      </div>
+                    </div>
+                    <div style={{ color: '#9a8b74', fontSize: '0.8rem' }}>
+                      {session.playerCount}/{session.maxPlayers}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button
+              onClick={() => setShowSessionBrowser(false)}
+              style={{
+                marginTop: '1rem',
+                background: '#2a2218',
+                border: '1px solid #4a3d2e',
+                borderRadius: '4px',
+                padding: '0.4rem 1rem',
+                color: '#9a8b74',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                width: '100%',
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       <p style={{ fontSize: '0.8rem', color: '#6a5d4a', fontStyle: 'italic' }}>
         Cooperative Survival RPG

@@ -24,7 +24,7 @@
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
-import { Camera, createCamera, cameraFollow, cameraZoom, ZOOM_STEP } from '@/lib/engine/camera';
+import { Camera, createCamera, cameraFollow, cameraZoom, ZOOM_STEP, worldToScreen } from '@/lib/engine/camera';
 import { renderFrame } from '@/lib/engine/renderer';
 import { EntityInterpolator } from '@/lib/engine/interpolation';
 import { VisualEffectsSystem } from '@/lib/engine/effects';
@@ -55,6 +55,8 @@ export interface GameCanvasProps {
   onCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
   /** Callback fired with the effects system instance for external effect triggers. */
   onEffectsReady?: (effects: VisualEffectsSystem) => void;
+  /** Input handler reference — used to update aim angle based on player screen position. */
+  inputHandler?: { updateAimAngle: (playerScreenX: number, playerScreenY: number) => void } | null;
 }
 
 /**
@@ -73,6 +75,7 @@ export default function GameCanvas({
   onCanvasReady,
   onEffectsReady,
   spectateTargetId,
+  inputHandler,
 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<Camera>(createCamera(width, height, tileSize));
@@ -157,13 +160,23 @@ export default function GameCanvas({
       }
     }
 
+    // Update aim angle: tell the input handler where the player is on screen
+    // so it can calculate the angle from mouse cursor to player position.
+    if (inputHandler && localPlayerId) {
+      const localEntity = interpolator.getEntity(`player_${localPlayerId}`);
+      if (localEntity) {
+        const playerScreen = worldToScreen(camera, localEntity.x, localEntity.y);
+        inputHandler.updateAimAngle(playerScreen.x, playerScreen.y);
+      }
+    }
+
     // Render the frame (including active visual effects)
     const activeEffects = effectsRef.current.getActiveEffects();
     renderFrame(ctx, camera, map, interpolatedEntities, localPlayerId, screenShake, activeEffects);
 
     // Schedule next frame
     animFrameRef.current = requestAnimationFrame(render);
-  }, [map, localPlayerId, screenShake, spectateTargetId]);
+  }, [map, localPlayerId, screenShake, spectateTargetId, inputHandler]);
 
   // Start/stop render loop
   useEffect(() => {

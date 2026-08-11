@@ -54,6 +54,10 @@ if (args.Contains("--help") || args.Contains("-h"))
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
+// Set content root to exe directory (critical for published deployment to find wwwroot/)
+builder.Environment.ContentRootPath = AppContext.BaseDirectory;
+builder.Environment.WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+
 // Configure AOT-compatible JSON serialization
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
@@ -73,10 +77,14 @@ builder.WebHost.ConfigureKestrel(options =>
 
 var app = builder.Build();
 
-// Start Kafka consumer for session heartbeats
+// Start Kafka consumer for session heartbeats (non-critical — REST fallback works)
 var kafka = app.Services.GetRequiredService<KafkaService>();
 var sessionRegistry = app.Services.GetRequiredService<SessionRegistry>();
-_ = Task.Run(() => kafka.ConsumeSessionHeartbeats(sessionRegistry));
+_ = Task.Run(() =>
+{
+    try { kafka.ConsumeSessionHeartbeats(sessionRegistry); }
+    catch (Exception ex) { Console.WriteLine($"[Kafka] Consumer crashed: {ex.Message}. REST heartbeats still work."); }
+});
 
 // --- REST API Endpoints ---
 

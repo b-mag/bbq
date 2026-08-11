@@ -38,19 +38,8 @@ using Carcosa.Server.Cryptol;
 // These are simple string checks rather than a CLI parsing library to keep
 // the dependency graph minimal for AOT (fewer assemblies to trim/compile).
 var port = 5000;
-var headless = args.Contains("--headless");
-var portArg = args.FirstOrDefault(a => a.StartsWith("--port="));
-if (portArg != null && int.TryParse(portArg.AsSpan(7), out var customPort))
-{
-    port = customPort;
-}
-// Bot spawning: --spawn-bots=N spawns N internal bot clients after startup
+var headless = false;
 var spawnBots = 0;
-var botsArg = args.FirstOrDefault(a => a.StartsWith("--spawn-bots="));
-if (botsArg != null && int.TryParse(botsArg.AsSpan(13), out var botCount))
-{
-    spawnBots = botCount;
-}
 
 // Show help
 if (args.Contains("--help") || args.Contains("-h"))
@@ -74,6 +63,34 @@ var builder = WebApplication.CreateSlimBuilder(args);
 builder.Environment.ContentRootPath = AppContext.BaseDirectory;
 builder.Environment.WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 
+// --- Load configuration from appsettings.json ---
+// CLI args override config file values (standard .NET config precedence).
+var config = builder.Configuration;
+var carcosaConfig = config.GetSection("Carcosa");
+port = carcosaConfig.GetValue("Port", port);
+headless = carcosaConfig.GetValue("Headless", headless);
+spawnBots = carcosaConfig.GetValue("SpawnBots", spawnBots);
+var serverName = carcosaConfig.GetValue("ServerName", "Carcosa Server") ?? "Carcosa Server";
+var maxPlayers = carcosaConfig.GetValue("MaxPlayers", 8);
+
+// Matchmaking configuration
+var matchmakingConfig = new MatchmakingConfig();
+var matchmakingSection = carcosaConfig.GetSection("Matchmaking");
+matchmakingConfig.Url = matchmakingSection.GetValue("Url", matchmakingConfig.Url) ?? matchmakingConfig.Url;
+matchmakingConfig.Enabled = matchmakingSection.GetValue("Enabled", matchmakingConfig.Enabled);
+matchmakingConfig.HeartbeatIntervalSeconds = matchmakingSection.GetValue("HeartbeatIntervalSeconds", 10);
+
+// CLI overrides for matchmaking URL
+var matchmakingUrlArg = args.FirstOrDefault(a => a.StartsWith("--matchmaking-url="));
+if (matchmakingUrlArg != null) matchmakingConfig.Url = matchmakingUrlArg[18..];
+
+// CLI overrides for other settings
+if (args.Contains("--headless")) headless = true;
+var portArgOverride = args.FirstOrDefault(a => a.StartsWith("--port="));
+if (portArgOverride != null && int.TryParse(portArgOverride.AsSpan(7), out var cliPort)) port = cliPort;
+var botsArgOverride = args.FirstOrDefault(a => a.StartsWith("--spawn-bots="));
+if (botsArgOverride != null && int.TryParse(botsArgOverride.AsSpan(13), out var cliBots)) spawnBots = cliBots;
+
 // WHY: AOT requires all JSON serialization to go through source-generated contexts.
 // This line registers our GameJsonContext (which handles WebSocket messages) plus
 // AppJsonContext (which handles HTTP API responses) so the minimal API endpoints
@@ -88,6 +105,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 // all WebSocket handlers and API endpoints share the same instance.
 builder.Services.AddSingleton<ConnectionManager>();
 builder.Services.AddSingleton<CryptolStore>();
+builder.Services.AddSingleton(new MatchmakingClient(matchmakingConfig, serverName, port));
 builder.Services.AddSingleton<GameLoop>(sp =>
 {
     var cm = sp.GetRequiredService<ConnectionManager>();
@@ -120,6 +138,43 @@ gameLoop.Session = sessionManager;
 
 // Start the game loop on its dedicated background thread
 gameLoop.Start();
+
+// Check matchmaking service connectivity — polls every 5 seconds.
+// Starts heartbeat when online, stops when it goes offline. Fully dynamic.
+var matchmakingClient = app.Services.GetRequiredService<MatchmakingClient>();
+_ = Task.Run(async () =>
+{
+    // Wait for HTTP server to be ready
+    await Task.Delay(2000);
+
+    while (true)
+    {
+        var wasOnline = matchmakingClient.IsOnline;
+        var isNowOnline = await matchmakingClient.CheckOnlineAsync();
+
+        if (isNowOnline && !wasOnline)
+        {
+            // Just came online — start heartbeat
+            matchmakingClient.StartHeartbeat(() => new SessionHeartbeatData
+            {
+                SessionId = sessionManager.SessionId,
+                HostAddress = $"localhost:{port}", // In production, this would be the public IP
+                PlayerCount = connectionManager.ConnectionCount,
+                MaxPlayers = maxPlayers,
+                State = sessionManager.State.ToString().ToLowerInvariant(),
+                Scenario = sessionManager.SelectedScenario.ToString().ToLowerInvariant(),
+                CurrentWave = gameLoop.State.CurrentWave,
+            });
+        }
+        else if (!isNowOnline && wasOnline)
+        {
+            // Just went offline — stop heartbeat
+            matchmakingClient.StopHeartbeat();
+        }
+
+        await Task.Delay(5000); // Poll every 5 seconds
+    }
+});
 
 // WHY: Wire up message routing based on message type. This acts as the central
 // message dispatcher. WebSocket messages arrive on HTTP thread pool threads and
@@ -287,6 +342,18 @@ app.MapGet("/api/map", (GameLoop gl) =>
         gl.State.Map.Seed,
         gl.State.Map.Rooms.Length,
         gl.State.Map.SpawnPoints.Length));
+});
+
+// Matchmaking status — tells the frontend if online mode is available
+app.MapGet("/api/matchmaking-status", (MatchmakingClient mm) => new MatchmakingStatusResponse(
+    mm.IsOnline,
+    mm.LastContact));
+
+// Available sessions — queries the matchmaking service for joinable games
+app.MapGet("/api/available-sessions", async (MatchmakingClient mm) =>
+{
+    var sessions = await mm.GetAvailableSessionsAsync();
+    return Results.Ok(sessions);
 });
 
 // WHY: Static file serving for the embedded Next.js frontend.
@@ -528,6 +595,10 @@ internal record MapInfoResponse(
     int RoomCount,
     int SpawnPointCount);
 
+internal record MatchmakingStatusResponse(
+    bool IsOnline,
+    DateTime LastContact);
+
 /// <summary>
 /// Source-generated JSON context for HTTP API response types.
 /// AOT REQUIREMENT: Without this, the minimal API serializer would need runtime
@@ -537,6 +608,9 @@ internal record MapInfoResponse(
 /// </summary>
 [JsonSerializable(typeof(HealthResponse))]
 [JsonSerializable(typeof(MapInfoResponse))]
+[JsonSerializable(typeof(MatchmakingStatusResponse))]
+[JsonSerializable(typeof(List<AvailableSession>))]
+[JsonSerializable(typeof(AvailableSession))]
 internal partial class AppJsonContext : JsonSerializerContext
 {
 }

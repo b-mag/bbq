@@ -9,7 +9,8 @@ interface SidebarProps {
 
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'overview', label: 'Overview', icon: '📊' },
-  { id: 'sessions', label: 'Sessions', icon: '🎮' },
+  { id: 'overworld', label: 'Overworld', icon: '🌍' },
+  { id: 'sessions', label: 'Dungeons', icon: '🎮' },
   { id: 'players', label: 'Players', icon: '👥' },
   { id: 'analytics', label: 'Analytics', icon: '📈' },
 ];

@@ -8,9 +8,11 @@ import SessionModal from '@/components/SessionModal';
 import AnalyticsPanel from '@/components/AnalyticsPanel';
 import PlayersPanel from '@/components/PlayersPanel';
 import LiveFeed from '@/components/LiveFeed';
+import OverworldPanel from '@/components/OverworldPanel';
+import AdminBroadcast from '@/components/AdminBroadcast';
 import { DashboardData, SessionInfo, fetchDashboardData } from '@/lib/api';
 
-export type TabId = 'overview' | 'sessions' | 'players' | 'analytics';
+export type TabId = 'overview' | 'sessions' | 'players' | 'analytics' | 'overworld';
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabId>('overview');
@@ -69,6 +71,7 @@ export default function Dashboard() {
               {activeTab === 'sessions' && 'Active Sessions'}
               {activeTab === 'players' && 'Player Registry'}
               {activeTab === 'analytics' && 'Analytics & Insights'}
+              {activeTab === 'overworld' && 'Overworld Monitor'}
             </h1>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
               Carcosa Matchmaking Service Monitor
@@ -124,6 +127,15 @@ export default function Dashboard() {
 
         {activeTab === 'analytics' && (
           <AnalyticsPanel analytics={data?.analytics ?? null} />
+        )}
+
+        {activeTab === 'overworld' && (
+          <OverworldPanel />
+        )}
+
+        {/* Admin broadcast is shown on the overview tab */}
+        {activeTab === 'overview' && (
+          <AdminBroadcast />
         )}
       </main>
 

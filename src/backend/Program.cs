@@ -32,6 +32,7 @@ using System.Text.Json.Serialization;
 using Carcosa.Server.Game;
 using Carcosa.Server.Network;
 using Carcosa.Server.Cryptol;
+using Carcosa.Server.P2P;
 
 // --- CLI Arguments ---
 // Parse command-line options for port and headless mode.
@@ -91,6 +92,16 @@ if (portArgOverride != null && int.TryParse(portArgOverride.AsSpan(7), out var c
 var botsArgOverride = args.FirstOrDefault(a => a.StartsWith("--spawn-bots="));
 if (botsArgOverride != null && int.TryParse(botsArgOverride.AsSpan(13), out var cliBots)) spawnBots = cliBots;
 
+// Dungeon instance mode: when launched with --seed and --scenario, the server
+// generates a specific dungeon and auto-starts the game (no lobby needed).
+// Used when the overworld server tells the party leader to host a dungeon.
+int? dungeonSeed = null;
+string? dungeonScenario = null;
+var seedArg = args.FirstOrDefault(a => a.StartsWith("--seed="));
+if (seedArg != null && int.TryParse(seedArg.AsSpan(7), out var parsedSeed)) dungeonSeed = parsedSeed;
+var scenarioArg = args.FirstOrDefault(a => a.StartsWith("--scenario="));
+if (scenarioArg != null) dungeonScenario = scenarioArg[11..];
+
 // WHY: AOT requires all JSON serialization to go through source-generated contexts.
 // This line registers our GameJsonContext (which handles WebSocket messages) plus
 // AppJsonContext (which handles HTTP API responses) so the minimal API endpoints
@@ -106,6 +117,31 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 builder.Services.AddSingleton<ConnectionManager>();
 builder.Services.AddSingleton<CryptolStore>();
 builder.Services.AddSingleton(new MatchmakingClient(matchmakingConfig, serverName, port));
+
+// P2P Mesh: Load or create our persistent peer identity, then register the mesh
+var playerNameForPeer = args.FirstOrDefault(a => a.StartsWith("--name="))?.Substring(7) ?? serverName;
+// Use port in identity filename to ensure separate identities when running multiple instances
+var peerIdentity = PeerIdentityStore.LoadOrCreate(playerNameForPeer, port);
+Console.WriteLine($"[P2P] Peer ID: {peerIdentity.PeerId}, Protocol: {PeerProtocol.ProtocolVersion}, " +
+    $"Game: {PeerProtocol.GameVersionString}");
+builder.Services.AddSingleton(peerIdentity);
+builder.Services.AddSingleton(new PeerMesh(peerIdentity));
+builder.Services.AddSingleton(sp => new OverworldSync(
+    sp.GetRequiredService<PeerMesh>(),
+    sp.GetRequiredService<PeerIdentity>()));
+builder.Services.AddSingleton(sp => new PeerExchange(
+    sp.GetRequiredService<PeerMesh>(),
+    sp.GetRequiredService<PeerIdentity>()));
+builder.Services.AddSingleton(sp => new PeerValidator(
+    sp.GetRequiredService<PeerMesh>(),
+    sp.GetRequiredService<PeerIdentity>()));
+builder.Services.AddSingleton(sp => new TrackerClient(
+    matchmakingConfig.Url,
+    sp.GetRequiredService<PeerIdentity>(),
+    sp.GetRequiredService<PeerMesh>()));
+builder.Services.AddSingleton(sp => new WorldShard(
+    sp.GetRequiredService<PeerIdentity>(),
+    sp.GetRequiredService<PeerMesh>()));
 builder.Services.AddSingleton<GameLoop>(sp =>
 {
     var cm = sp.GetRequiredService<ConnectionManager>();
@@ -136,8 +172,82 @@ var sessionManager = app.Services.GetRequiredService<SessionManager>();
 // setting it after both are constructed.
 gameLoop.Session = sessionManager;
 
+// Dungeon Instance Mode: If --seed and --scenario are provided, pre-generate the map.
+// When players connect, they skip the lobby and go directly into the dungeon.
+if (dungeonSeed.HasValue && dungeonScenario != null)
+{
+    Console.WriteLine($"[Dungeon Instance] Seed: {dungeonSeed.Value}, Scenario: {dungeonScenario}");
+    sessionManager.SelectedScenario = dungeonScenario switch
+    {
+        "temple" => MapScenario.Temple,
+        _ => MapScenario.Warehouse,
+    };
+
+    // Pre-generate the map from the seed
+    var mapSeed = dungeonSeed.Value;
+    gameLoop.State.Scenario = sessionManager.SelectedScenario;
+    gameLoop.State.Map = sessionManager.SelectedScenario switch
+    {
+        MapScenario.Temple => MapGenerator.GenerateTemple(100, 100, mapSeed),
+        _ => MapGenerator.Generate(80, 60, mapSeed),
+    };
+    Console.WriteLine($"[Dungeon Instance] Map generated: {gameLoop.State.Map.Width}x{gameLoop.State.Map.Height}");
+
+    // Override OnPlayerConnected to auto-start when first player joins
+    connectionManager.OnPlayerConnected += (playerId, playerName) =>
+    {
+        if (sessionManager.State == SessionState.Lobby && gameLoop.State.Map != null)
+        {
+            // Auto-transition to playing state
+            sessionManager.AddPlayer(playerId, playerName);
+
+            // Select a default class and mark ready
+            sessionManager.SelectClass(playerId, "detective");
+            sessionManager.SetReady(playerId, true);
+
+            // Start the game
+            sessionManager.TryStartGame(playerId);
+        }
+    };
+}
+
 // Start the game loop on its dedicated background thread
 gameLoop.Start();
+
+// Start P2P overworld state sync (broadcasts local player to mesh peers)
+var overworldSync = app.Services.GetRequiredService<OverworldSync>();
+var peerValidator = app.Services.GetRequiredService<PeerValidator>();
+overworldSync.SetValidator(peerValidator);
+
+// Initialize local player at the overworld spawn point (100.5, 180.5 — fishing village)
+// These coordinates match the OverworldGenerator's SpawnPoint { X=100, Y=180 }
+overworldSync.UpdateLocalPosition(100.5f, 180.5f, 0, 0);
+
+// Ensure WorldId and PublicAddress are set before tracker registration
+var worldShard = app.Services.GetRequiredService<WorldShard>();
+peerIdentity.PublicAddress = $"127.0.0.1:{port}"; // Fallback — tracker will update via STUN
+
+Console.WriteLine($"[P2P:Init] Local player initialized at spawn point (100.5, 180.5)");
+Console.WriteLine($"[P2P:Init] Peer ID: {peerIdentity.PeerId}");
+Console.WriteLine($"[P2P:Init] World: {peerIdentity.WorldId}");
+Console.WriteLine($"[P2P:Init] Public Address: {peerIdentity.PublicAddress}");
+
+overworldSync.Start();
+
+// Start Peer Exchange (periodic sharing of known peer lists for mesh discovery)
+var peerExchange = app.Services.GetRequiredService<PeerExchange>();
+peerExchange.Start();
+
+// Attempt to bootstrap from cached peers (in case tracker is unavailable)
+_ = Task.Run(async () =>
+{
+    await Task.Delay(2000); // Wait for server to be ready
+    await peerExchange.ConnectFromCacheAsync();
+});
+
+// Start tracker client (optional peer discovery via matchmaking service)
+var trackerClient = app.Services.GetRequiredService<TrackerClient>();
+trackerClient.Start();
 
 // Check matchmaking service connectivity — polls every 5 seconds.
 // Starts heartbeat when online, stops when it goes offline. Fully dynamic.
@@ -238,6 +348,24 @@ connectionManager.OnPlayerDisconnected += (playerId) =>
 app.UseWebSockets(new WebSocketOptions
 {
     KeepAliveInterval = TimeSpan.FromSeconds(30)
+});
+
+// --- P2P Peer-to-Peer WebSocket Endpoint ---
+// Other Carcosa.Server instances connect here to form the mesh.
+// This is separate from /ws (player client connections).
+app.Map("/ws/peer", async (HttpContext context) =>
+{
+    if (!context.WebSockets.IsWebSocketRequest)
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsync("WebSocket connection required for peer mesh");
+        return;
+    }
+
+    var peerMesh = context.RequestServices.GetRequiredService<PeerMesh>();
+    using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+
+    await peerMesh.HandleInboundPeerAsync(webSocket, context.RequestAborted);
 });
 
 // WHY: Single WebSocket endpoint at /ws. Each connection is a player session.
@@ -354,6 +482,153 @@ app.MapGet("/api/available-sessions", async (MatchmakingClient mm) =>
 {
     var sessions = await mm.GetAvailableSessionsAsync();
     return Results.Ok(sessions);
+});
+
+// --- P2P Overworld State API (queried by local frontend) ---
+
+// Get overworld map data (the frontend loads this on startup instead of via WebSocket)
+app.MapGet("/api/p2p/map", async () =>
+{
+    // Try to load local overworld.json first
+    var mapPath = Path.Combine(AppContext.BaseDirectory, "overworld.json");
+    if (File.Exists(mapPath))
+    {
+        var json = await File.ReadAllTextAsync(mapPath);
+        return Results.Content(json, "application/json");
+    }
+
+    // If not found locally, try to fetch from the matchmaking tracker
+    try
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        var response = await http.GetAsync($"{matchmakingConfig.Url}/api/overworld/map");
+        if (response.IsSuccessStatusCode)
+        {
+            var json = await response.Content.ReadAsStringAsync();
+            // Cache locally for future use
+            await File.WriteAllTextAsync(mapPath, json);
+            Console.WriteLine("[P2P:Map] Downloaded overworld map from tracker and cached locally");
+            return Results.Content(json, "application/json");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[P2P:Map] Failed to fetch map from tracker: {ex.Message}");
+    }
+
+    return Results.NotFound();
+});
+
+// Get all visible players in the overworld (local + remote peers)
+var p2pPlayersCallCount = 0;
+app.MapGet("/api/p2p/players", (OverworldSync sync) =>
+{
+    var count = Interlocked.Increment(ref p2pPlayersCallCount);
+    if (count <= 3 || count % 100 == 0) // Log first 3 calls then every 100th
+    {
+        var players = sync.GetAllVisiblePlayers();
+        Console.WriteLine($"[P2P:API] GET /api/p2p/players (call #{count}) → {players.Count} player(s)");
+        foreach (var p in players)
+            Console.WriteLine($"[P2P:API]   {p.DisplayName} ({p.PeerId}) at ({p.X:F1}, {p.Y:F1})");
+    }
+
+    var result = sync.GetAllVisiblePlayers().Select(p => new P2PPlayerResponse(
+        p.PeerId, p.DisplayName, p.X, p.Y, p.VelocityX, p.VelocityY,
+        p.Status, p.PartyId ?? "", p.IsPartyLeader)).ToArray();
+    return Results.Ok(result);
+});
+
+// Update local player position (called by frontend at 20Hz for mesh broadcast)
+var p2pPositionCallCount = 0;
+app.MapPost("/api/p2p/position", (P2PPositionUpdate update, OverworldSync sync) =>
+{
+    var count = Interlocked.Increment(ref p2pPositionCallCount);
+    if (count <= 3 || count % 200 == 0)
+    {
+        Console.WriteLine($"[P2P:API] POST /api/p2p/position (call #{count}) → ({update.X:F1}, {update.Y:F1})");
+    }
+    sync.UpdateLocalPosition(update.X, update.Y, update.VelocityX, update.VelocityY);
+    return Results.Ok();
+});
+
+// --- DEBUG: Log what /api/p2p/players is returning ---
+app.MapGet("/api/p2p/debug", (OverworldSync sync, PeerIdentity identity, PeerMesh mesh) =>
+{
+    var allPlayers = sync.GetAllVisiblePlayers();
+    Console.WriteLine($"[P2P:Debug] /api/p2p/debug called");
+    Console.WriteLine($"[P2P:Debug]   Local peer ID: {identity.PeerId}");
+    Console.WriteLine($"[P2P:Debug]   Local address: {identity.PublicAddress}");
+    Console.WriteLine($"[P2P:Debug]   World: {identity.WorldId}");
+    Console.WriteLine($"[P2P:Debug]   Mesh peers: {mesh.PeerCount}");
+    Console.WriteLine($"[P2P:Debug]   Visible players: {allPlayers.Count}");
+    foreach (var p in allPlayers)
+    {
+        Console.WriteLine($"[P2P:Debug]     - {p.DisplayName} ({p.PeerId}) at ({p.X:F1}, {p.Y:F1}) status={p.Status}");
+    }
+    return Results.Ok(new P2PMessageResponse(
+        $"Players: {allPlayers.Count}, Peers: {mesh.PeerCount}, Local: ({identity.PeerId})",
+        identity.PublicAddress));
+});
+
+// Get mesh status (peer count, our identity, connectivity)
+app.MapGet("/api/p2p/status", (PeerMesh mesh, PeerIdentity identity) =>
+{
+    var peers = mesh.Connections.Select(c => new P2PPeerInfo(
+        c.RemotePeerId, c.RemoteDisplayName, c.LatencyMs)).ToArray();
+    var response = new P2PStatusResponse(
+        identity.PeerId, identity.DisplayName, identity.WorldId,
+        mesh.PeerCount, PeerProtocol.GameVersionString, PeerProtocol.ProtocolVersion, peers);
+    return Results.Ok(response);
+});
+
+// --- Glyph System API ---
+
+// Generate a Glyph code for this peer (so the player can share it)
+app.MapGet("/api/p2p/glyph", (PeerIdentity identity) =>
+{
+    var glyph = GlyphCodec.GenerateForPeer(identity);
+    return Results.Ok(new P2PGlyphResponse(glyph, identity.WorldId, identity.PublicAddress));
+});
+
+// Connect to a peer using a Glyph code (manual discovery)
+app.MapPost("/api/p2p/glyph/connect", async (GlyphConnectRequest request, PeerMesh mesh) =>
+{
+    var decoded = GlyphCodec.DecodeToAddress(request.Glyph);
+    if (decoded == null)
+        return Results.BadRequest(new P2PErrorResponse("Invalid Glyph code"));
+
+    var (address, worldIndex) = decoded.Value;
+    Console.WriteLine($"[P2P:Glyph] Connecting to {address} (world index: {worldIndex}) from Glyph: {request.Glyph}");
+
+    var success = await mesh.ConnectToPeerAsync(address);
+    return success
+        ? Results.Ok(new P2PMessageResponse($"Connected to peer at {address}", address))
+        : Results.BadRequest(new P2PErrorResponse($"Failed to connect to {address}"));
+});
+
+// Get recent admin broadcast messages (for frontend display)
+app.MapGet("/api/p2p/admin-messages", (TrackerClient tracker) =>
+{
+    return Results.Ok(new P2PAdminStatusResponse(tracker.IsTrackerOnline));
+});
+
+// Get world shard info (current shard, capacity, player count)
+app.MapGet("/api/p2p/shard", (WorldShard shard) =>
+{
+    var info = new P2PShardResponse(
+        shard.CurrentShardId, shard.CurrentShardIndex,
+        shard.PlayerCount, PeerProtocol.MaxPeersPerWorld, shard.IsAtCapacity);
+    return Results.Ok(info);
+});
+
+// Switch to a different world shard
+app.MapPost("/api/p2p/shard/switch", async (ShardSwitchRequest request, WorldShard shard) =>
+{
+    if (string.IsNullOrWhiteSpace(request.ShardId))
+        return Results.BadRequest(new P2PErrorResponse("shardId is required"));
+
+    await shard.SwitchShardAsync(request.ShardId);
+    return Results.Ok(new P2PMessageResponse($"Switched to shard {request.ShardId}", request.ShardId));
 });
 
 // WHY: Static file serving for the embedded Next.js frontend.
@@ -599,6 +874,25 @@ internal record MatchmakingStatusResponse(
     bool IsOnline,
     DateTime LastContact);
 
+internal record GlyphConnectRequest(string Glyph);
+internal record ShardSwitchRequest(string ShardId);
+
+// --- P2P API Response Types (required for AOT serialization — no anonymous objects) ---
+internal record P2PPlayerResponse(
+    string Id, string Name, float X, float Y, float VelocityX, float VelocityY,
+    string Status, string PartyId, bool IsPartyLeader);
+internal record P2PPeerInfo(string Id, string Name, int Latency);
+internal record P2PStatusResponse(
+    string PeerId, string DisplayName, string WorldId, int PeerCount,
+    string GameVersion, int ProtocolVersion, P2PPeerInfo[] ConnectedPeers);
+internal record P2PGlyphResponse(string Glyph, string WorldId, string Address);
+internal record P2PMessageResponse(string Message, string Address);
+internal record P2PErrorResponse(string Error);
+internal record P2PAdminStatusResponse(bool TrackerOnline);
+internal record P2PShardResponse(
+    string ShardId, byte ShardIndex, int PlayerCount, int MaxPlayers, bool IsAtCapacity);
+internal record P2PPositionUpdate(float X, float Y, float VelocityX, float VelocityY);
+
 /// <summary>
 /// Source-generated JSON context for HTTP API response types.
 /// AOT REQUIREMENT: Without this, the minimal API serializer would need runtime
@@ -609,6 +903,19 @@ internal record MatchmakingStatusResponse(
 [JsonSerializable(typeof(HealthResponse))]
 [JsonSerializable(typeof(MapInfoResponse))]
 [JsonSerializable(typeof(MatchmakingStatusResponse))]
+[JsonSerializable(typeof(GlyphConnectRequest))]
+[JsonSerializable(typeof(ShardSwitchRequest))]
+[JsonSerializable(typeof(P2PPlayerResponse))]
+[JsonSerializable(typeof(P2PPlayerResponse[]))]
+[JsonSerializable(typeof(P2PPeerInfo))]
+[JsonSerializable(typeof(P2PPeerInfo[]))]
+[JsonSerializable(typeof(P2PStatusResponse))]
+[JsonSerializable(typeof(P2PGlyphResponse))]
+[JsonSerializable(typeof(P2PMessageResponse))]
+[JsonSerializable(typeof(P2PErrorResponse))]
+[JsonSerializable(typeof(P2PAdminStatusResponse))]
+[JsonSerializable(typeof(P2PShardResponse))]
+[JsonSerializable(typeof(P2PPositionUpdate))]
 [JsonSerializable(typeof(List<AvailableSession>))]
 [JsonSerializable(typeof(AvailableSession))]
 internal partial class AppJsonContext : JsonSerializerContext

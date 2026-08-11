@@ -48,7 +48,7 @@ public sealed class SessionManager
     public SessionState State { get; private set; } = SessionState.Lobby;
     public int MaxPlayers { get; set; } = 8;
     /// <summary>Selected scenario for this session. Set by host in lobby.</summary>
-    public MapScenario SelectedScenario { get; private set; } = MapScenario.Warehouse;
+    public MapScenario SelectedScenario { get; set; } = MapScenario.Warehouse;
     /// <summary>Player ID of the invader (if one has joined). Null if no invader.</summary>
     public string? InvaderId { get; private set; }
 
@@ -228,6 +228,33 @@ public sealed class SessionManager
     }
 
     /// <summary>
+    /// Invite a bot player to the current lobby. The bot auto-selects a class and readies up.
+    /// </summary>
+    private void InviteBot()
+    {
+        lock (_lock)
+        {
+            var botId = $"bot_{Guid.NewGuid().ToString("N")[..6]}";
+            var botName = $"Bot_{_players.Count}";
+            var classes = new[] { "gangster", "detective", "surgeon" };
+            var selectedClass = classes[Random.Shared.Next(classes.Length)];
+
+            var session = new PlayerSession
+            {
+                PlayerId = botId,
+                PlayerName = botName,
+                SelectedClass = selectedClass,
+                IsReady = true,
+                IsHost = false
+            };
+            _players[botId] = session;
+
+            Console.WriteLine($"[Session] Bot invited: {botName} ({selectedClass})");
+            BroadcastSessionInfo();
+        }
+    }
+
+    /// <summary>
     /// Allow a player to join the active game as an invader (PvP hostile).
     /// Only one invader per session. Must be mid-game (playing state).
     /// </summary>
@@ -387,6 +414,12 @@ public sealed class SessionManager
                     break;
                 case "join_as_invader":
                     TryJoinAsInvader(playerId);
+                    break;
+                case "invite_bot":
+                    if (playerId == HostId && State == SessionState.Lobby)
+                    {
+                        InviteBot();
+                    }
                     break;
             }
         }

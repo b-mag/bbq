@@ -1,21 +1,31 @@
 # CARCOSA
 
-A cooperative top-down survival RPG.
-Built as a .NET 10 Native AOT compiled executable serving a Next.js React frontend.
+A cooperative top-down action RPG with a persistent shared overworld and instanced dungeons.
+Built as .NET 10 Native AOT compiled executables with a Next.js React frontend.
 
 ## Overview
 
-Carcosa is a 1-8 player co-op game where investigators fight through waves of cultists
-in a 1920s coastal village. Players choose from three synergistic classes and work together
-to survive. Features two scenarios, PvP invader mode, and Cryptol currency rewards.
+Carcosa is a 1-8 player co-op game set in a sci-fi/fantasy world inspired by Robert W. Chambers'
+*The King in Yellow* and the fictional city of Carcosa. Players explore a shared persistent
+overworld (Lake Hali, dark forests, ancient ruins, fishing village) and form parties to enter
+instanced dungeons together.
 
-### Scenarios
+### Architecture: Shared Overworld + Instanced Dungeons
+
+- **Overworld**: A persistent 200x200 tile map hosted by the matchmaking service. All connected
+  players are visible and can interact (chat, party invite). No combat in the overworld.
+- **Dungeons**: Instanced content (The Warehouse, Temple of Hali, Mountain Cave). When a party
+  enters a dungeon entrance, the party leader's game server generates the instance from a shared
+  seed. All party members connect peer-to-peer to the leader's server.
+- **Flow**: Connect → Overworld → Form Party → Enter Dungeon → Play → Return to Overworld
+
+### Scenarios (Dungeon Instances)
 
 | Scenario | Layout | Mode | Victory |
 |----------|--------|------|---------|
 | **The Warehouse** | BSP-generated rooms/corridors | 5 waves + boss | Defeat the boss |
 | **The Temple** | Large open arena (100x100) | Endless survival | Survive as long as possible |
-| **Carcosa** | *Coming soon* | TBD | TBD |
+| **Mountain Cave** | BSP dungeon | Waves + boss | Defeat the boss |
 
 ### Classes
 

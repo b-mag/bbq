@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/backend/">
+    <Project Path="src/backend/Carcosa.Server.csproj" />
+  </Folder>
+  <Folder Name="/src/matchmaking/">
+    <Project Path="src/matchmaking/Carcosa.Matchmaking.csproj" />
+  </Folder>
+  <Folder Name="/src/botclient/">
+    <Project Path="src/botclient/Carcosa.BotClient.csproj" />
+  </Folder>
+  <Folder Name="/src/tests/">
+    <Project Path="src/tests/Carcosa.Tests.csproj" />
+  </Folder>
+</Solution>

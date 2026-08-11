@@ -29,7 +29,7 @@ public sealed class WaveSystem
 {
     private const int WaveCount = 5;
     private const int IntermissionTicks = 600; // 30 seconds between waves (20 * 30)
-    private const int SpawnIntervalTicks = 20; // Spawn enemies over 1 second per batch
+    private const int SpawnIntervalTicks = 10; // Spawn one enemy every 0.5 seconds
 
     private readonly AISystem _aiSystem;
     private readonly Random _rng = new();
@@ -232,40 +232,40 @@ public sealed class WaveSystem
         return wave switch
         {
             1 => roll < 0.6f
-                ? ("cultist_torch", 35)     // Melee torch rushers
-                : ("cultist_dagger", 25),   // Light ranged dagger throwers
+                ? ("cultist_torch", 15)     // Melee torch rushers (easy first wave)
+                : ("cultist_dagger", 12),   // Light ranged dagger throwers (easy)
 
             2 => roll < 0.4f
-                ? ("cultist_torch", 40)
+                ? ("cultist_torch", 25)
                 : roll < 0.8f
-                    ? ("cultist_dagger", 30)
-                    : ("cultist_acolyte", 35),  // Mix in basic acolytes too
+                    ? ("cultist_dagger", 20)
+                    : ("cultist_acolyte", 20),
 
             3 => roll < 0.3f
-                ? ("cultist_torch", 45)
+                ? ("cultist_torch", 35)
                 : roll < 0.6f
-                    ? ("cultist_dagger", 35)
-                    : ("cultist_shotgun", 60),  // Shotgunners appear mid-level
+                    ? ("cultist_dagger", 30)
+                    : ("cultist_shotgun", 45),  // Shotgunners appear mid-level
 
             4 => roll < 0.2f
-                ? ("cultist_torch", 50)
+                ? ("cultist_torch", 40)
                 : roll < 0.4f
-                    ? ("cultist_dagger", 40)
+                    ? ("cultist_dagger", 35)
                     : roll < 0.7f
-                        ? ("cultist_shotgun", 65)
+                        ? ("cultist_shotgun", 55)
                         : roll < 0.9f
-                            ? ("cultist_lightning", 55) // Lightning cultists near boss
-                            : ("cult_leader", 150),     // Mini-boss cult leader
+                            ? ("cultist_lightning", 45)
+                            : ("cult_leader", 120),
 
             5 => roll < 0.15f
-                ? ("cultist_torch", 55)
+                ? ("cultist_torch", 45)
                 : roll < 0.35f
-                    ? ("cultist_shotgun", 70)
+                    ? ("cultist_shotgun", 60)
                     : roll < 0.6f
-                        ? ("cultist_lightning", 60)
+                        ? ("cultist_lightning", 50)
                         : roll < 0.85f
-                            ? ("cultist_dagger", 45)
-                            : ("cult_leader", 150),
+                            ? ("cultist_dagger", 40)
+                            : ("cult_leader", 120),
 
             _ => ("cultist_torch", 30)
         };

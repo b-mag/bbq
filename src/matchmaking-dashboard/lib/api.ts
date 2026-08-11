@@ -71,3 +71,64 @@ export async function fetchDashboardData(): Promise<DashboardData | null> {
     return null;
   }
 }
+
+// --- Overworld API Types ---
+
+export interface OverworldPlayerInfo {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  status: string;
+  partyId?: string;
+}
+
+export interface OverworldPartyInfo {
+  id: string;
+  leaderId: string;
+  leaderName: string;
+  memberCount: number;
+  members: { id: string; name: string }[];
+  status: string;
+}
+
+export interface OverworldStats {
+  totalConnected: number;
+  inOverworld: number;
+  inDungeon: number;
+  inParties: number;
+  totalParties: number;
+}
+
+/**
+ * Fetch overworld-specific data for the dashboard.
+ */
+export async function fetchOverworldData(): Promise<{
+  players: OverworldPlayerInfo[];
+  parties: OverworldPartyInfo[];
+  stats: OverworldStats | null;
+} | null> {
+  try {
+    const [playersRes, partiesRes, statsRes] = await Promise.allSettled([
+      fetch(`${API_BASE}/api/overworld/players`),
+      fetch(`${API_BASE}/api/overworld/parties`),
+      fetch(`${API_BASE}/api/overworld/stats`),
+    ]);
+
+    const players: OverworldPlayerInfo[] = playersRes.status === 'fulfilled' && playersRes.value.ok
+      ? await playersRes.value.json()
+      : [];
+
+    const parties: OverworldPartyInfo[] = partiesRes.status === 'fulfilled' && partiesRes.value.ok
+      ? await partiesRes.value.json()
+      : [];
+
+    const stats: OverworldStats | null = statsRes.status === 'fulfilled' && statsRes.value.ok
+      ? await statsRes.value.json()
+      : null;
+
+    return { players, parties, stats };
+  } catch {
+    return null;
+  }
+}

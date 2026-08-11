@@ -107,14 +107,14 @@ public sealed class SessionRegistry
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var staleThreshold = now - (StaleTimeoutSeconds * 1000);
         var staleKeys = _sessions
-            .Where(kv => kv.Value.Timestamp < staleThreshold)
+            .Where(kv => kv.Value.Timestamp < staleThreshold || kv.Value.PlayerCount == 0)
             .Select(kv => kv.Key)
             .ToList();
 
         foreach (var key in staleKeys)
         {
             _sessions.Remove(key);
-            Console.WriteLine($"[Sessions] Pruned stale session: {key}");
+            Console.WriteLine($"[Sessions] Pruned session: {key}");
         }
     }
 }

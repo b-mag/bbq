@@ -197,6 +197,7 @@ export default function GameCanvas({
         display: 'block',
         background: '#0d0a07',
         imageRendering: 'pixelated',
+        cursor: 'crosshair',
       }}
     />
   );

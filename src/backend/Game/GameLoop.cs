@@ -560,6 +560,26 @@ public sealed class GameLoop : IDisposable
                         }
                     }
 
+                    // Award small Cryptol to co-op players for each enemy kill
+                    if (killed && target.Type == EntityType.Enemy
+                        && sourceEntity.Type == EntityType.Player && !sourceEntity.IsInvader)
+                    {
+                        var killerOwnerId = sourceEntity.OwnerId;
+                        if (killerOwnerId != null)
+                        {
+                            _ = _connectionManager.SendToAsync(killerOwnerId, new GameMessage
+                            {
+                                Type = MessageTypes.GameEvent,
+                                GameEvent = new GameEventPayload
+                                {
+                                    Event = "cryptol_award",
+                                    Amount = 5,
+                                    Message = "+5 Cryptol"
+                                }
+                            });
+                        }
+                    }
+
                     // Lightning bolts pass through entities (hit multiple targets)
                     // All other projectiles are consumed on first hit
                     if (projectile.SubType != "lightning_bolt")

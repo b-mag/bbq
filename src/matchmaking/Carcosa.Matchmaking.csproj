@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Carcosa.Matchmaking</RootNamespace>
+
+    <!-- Native AOT Configuration -->
+    <PublishAot>true</PublishAot>
+    <TrimMode>full</TrimMode>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StripSymbols>true</StripSymbols>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Confluent.Kafka" Version="2.6.1" />
+  </ItemGroup>
+
+  <!-- Build dashboard frontend before .NET build -->
+  <Target Name="BuildDashboard" BeforeTargets="BeforeBuild" Condition="'$(SkipDashboardBuild)' != 'true'">
+    <Message Text="Building matchmaking dashboard..." Importance="high" />
+    <Exec Command="npm ci --prefer-offline" WorkingDirectory="$(MSBuildProjectDirectory)\..\matchmaking-dashboard" />
+    <Exec Command="npm run build" WorkingDirectory="$(MSBuildProjectDirectory)\..\matchmaking-dashboard" />
+    <RemoveDir Directories="$(MSBuildProjectDirectory)\wwwroot" />
+    <MakeDir Directories="$(MSBuildProjectDirectory)\wwwroot" />
+    <ItemGroup>
+      <DashboardOutput Include="$(MSBuildProjectDirectory)\..\matchmaking-dashboard\out\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DashboardOutput)"
+          DestinationFiles="@(DashboardOutput->'$(MSBuildProjectDirectory)\wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+
+</Project>

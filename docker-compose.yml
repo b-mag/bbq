@@ -1,0 +1,62 @@
+# =============================================================================
+# docker-compose.yml — Local Development: Kafka + Matchmaking Service
+# =============================================================================
+#
+# USAGE:
+#   docker-compose up -d          # Start Kafka + Matchmaking
+#   docker-compose logs -f        # Watch logs
+#   docker-compose down           # Stop everything
+#
+# SERVICES:
+#   kafka:        Apache Kafka in KRaft mode (no Zookeeper needed)
+#   matchmaking:  Carcosa matchmaking REST API + Kafka consumer
+#
+# AFTER STARTING:
+#   - Matchmaking API: http://localhost:5100
+#   - Kafka broker: localhost:9092 (for game servers to publish heartbeats)
+#   - Start game server normally: Carcosa.Server.exe --matchmaking-url=http://localhost:5100
+#
+# NOTE: The matchmaking service must be built first:
+#   cd bbq/src/matchmaking && dotnet publish -c Release -r win-x64
+# =============================================================================
+
+services:
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: carcosa-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft mode (no Zookeeper)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_MS: 30000  # 30 second retention (session heartbeats are ephemeral)
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: "carcosa-dev-cluster-001"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  matchmaking:
+    build:
+      context: ./src/matchmaking
+      dockerfile: Dockerfile
+    container_name: carcosa-matchmaking
+    ports:
+      - "5100:5100"
+    environment:
+      - KAFKA_BROKER=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: ["--port=5100", "--kafka=kafka:9092"]

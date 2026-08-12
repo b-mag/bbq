@@ -15,6 +15,7 @@ import { Camera, createCamera, cameraFollow, worldToScreen, screenToWorld, getVi
 import { OverworldGameMap, OwTileType, OW_TILE_COLORS, getOwTile } from '@/lib/overworld-map';
 import { OwPlayerState, OwDungeonEntranceData, OwWorldObjectData, OwLandmarkData } from '@/lib/overworld-messages';
 import { SpriteCache, initSprites } from '@/lib/engine/sprites';
+import { EnemyState, ProjectileState, LootDropState } from '@/hooks/useOverworldEnemies';
 
 interface OverworldCanvasProps {
   map: OverworldGameMap | null;
@@ -23,13 +24,16 @@ interface OverworldCanvasProps {
   dungeonEntrances: OwDungeonEntranceData[];
   worldObjects: OwWorldObjectData[];
   landmarks: OwLandmarkData[];
+  enemies: EnemyState[];
+  projectiles: ProjectileState[];
+  lootDrops: LootDropState[];
   width: number;
   height: number;
   onPlayerClick?: (playerId: string) => void;
 }
 
 export default function OverworldCanvas({
-  map, players, localPlayerId, dungeonEntrances, worldObjects, landmarks, width, height, onPlayerClick
+  map, players, localPlayerId, dungeonEntrances, worldObjects, landmarks, enemies, projectiles, lootDrops, width, height, onPlayerClick
 }: OverworldCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<Camera>(createCamera(width, height, 16));
@@ -82,11 +86,26 @@ export default function OverworldCanvas({
     // Render world objects
     renderWorldObjects(ctx, camera, worldObjects, spriteCacheRef.current);
 
+    // Render loot drops on ground (colored squares with glow)
+    for (const drop of lootDrops) {
+      renderLootDrop(ctx, camera, drop);
+    }
+
     // Render players (Y-sorted for depth)
     const sortedPlayers = [...players].sort((a, b) => a.y - b.y);
     for (const player of sortedPlayers) {
       if (player.status === 'in_dungeon') continue;
       renderPlayer(ctx, camera, player, player.id === localPlayerId);
+    }
+
+    // Render enemies (Y-sorted, mixed with players for depth)
+    for (const enemy of enemies) {
+      renderEnemy(ctx, camera, enemy);
+    }
+
+    // Render projectiles
+    for (const proj of projectiles) {
+      renderProjectile(ctx, camera, proj);
     }
 
     // Render landmark labels (only nearby ones)
@@ -98,7 +117,7 @@ export default function OverworldCanvas({
     renderVignette(ctx, width, height);
 
     animFrameRef.current = requestAnimationFrame(render);
-  }, [map, players, localPlayerId, dungeonEntrances, worldObjects, landmarks, width, height]);
+  }, [map, players, localPlayerId, dungeonEntrances, worldObjects, landmarks, enemies, projectiles, lootDrops, width, height]);
 
   useEffect(() => {
     animFrameRef.current = requestAnimationFrame(render);
@@ -140,9 +159,47 @@ export default function OverworldCanvas({
           return;
         }
       }
+
+      // Not a player click — fire primary ability toward cursor
+      if (e.button === 0) {
+        const localPlayer = players.find(p => p.id === localPlayerId);
+        if (localPlayer) {
+          const aimAngle = Math.atan2(world.y - localPlayer.y, world.x - localPlayer.x);
+          fetch('/api/gameplay/combat-action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ abilitySlot: 'primary', aimAngle }),
+          }).catch(() => {});
+        }
+      }
     };
+
+    // Right-click = secondary ability
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const screenX = e.clientX - rect.left;
+      const screenY = e.clientY - rect.top;
+      const camera = cameraRef.current;
+      const world = screenToWorld(camera, screenX, screenY);
+
+      const localPlayer = players.find(p => p.id === localPlayerId);
+      if (localPlayer) {
+        const aimAngle = Math.atan2(world.y - localPlayer.y, world.x - localPlayer.x);
+        fetch('/api/gameplay/combat-action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ abilitySlot: 'secondary', aimAngle }),
+        }).catch(() => {});
+      }
+    };
+
     canvas.addEventListener('click', handleClick);
-    return () => canvas.removeEventListener('click', handleClick);
+    canvas.addEventListener('contextmenu', handleContextMenu);
+    return () => {
+      canvas.removeEventListener('click', handleClick);
+      canvas.removeEventListener('contextmenu', handleContextMenu);
+    };
   }, [players, localPlayerId, onPlayerClick]);
 
   return (
@@ -309,14 +366,14 @@ function renderPlayer(ctx: CanvasRenderingContext2D, camera: Camera, player: OwP
   ctx.ellipse(screen.x + 2, screen.y + radius * 0.5, radius * 0.6, radius * 0.25, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Body
-  ctx.fillStyle = isLocal ? '#c9a84c' : '#8a7a5a';
+  // Body — Local: gold, Remote: purple (clearly distinct in dark fantasy palette)
+  ctx.fillStyle = isLocal ? '#c9a84c' : '#8b5fbf';
   ctx.beginPath();
   ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
   ctx.fill();
 
   // Border
-  ctx.strokeStyle = isLocal ? '#e8d080' : '#6a6050';
+  ctx.strokeStyle = isLocal ? '#e8d080' : '#a87dd4';
   ctx.lineWidth = isLocal ? 2 : 1;
   ctx.stroke();
 
@@ -338,10 +395,161 @@ function renderPlayer(ctx: CanvasRenderingContext2D, camera: Camera, player: OwP
   }
 
   // Name label
-  ctx.fillStyle = isLocal ? '#e8dcc8' : '#9a9080';
+  ctx.fillStyle = isLocal ? '#e8dcc8' : '#b8a0d4';
   ctx.font = `${Math.max(8, tileSize * 0.35)}px sans-serif`;
   ctx.textAlign = 'center';
   ctx.fillText(player.name, screen.x, screen.y + radius + tileSize * 0.4);
+}
+
+function renderLootDrop(ctx: CanvasRenderingContext2D, camera: Camera, drop: LootDropState) {
+  const screen = worldToScreen(camera, drop.x, drop.y);
+  const tileSize = getEffectiveTileSize(camera);
+  const size = tileSize * 0.3;
+
+  // Rarity glow colors
+  const RARITY_GLOW: Record<string, string> = {
+    Common: '#9a9a9a',
+    Uncommon: '#4a8c3f',
+    Rare: '#3f6fcc',
+    Epic: '#8b5fbf',
+  };
+
+  const glowColor = RARITY_GLOW[drop.rarity] || '#9a9a9a';
+
+  // Pulsing bob animation
+  const bob = Math.sin(Date.now() * 0.004 + drop.x * 3) * 1.5;
+
+  // Glow
+  ctx.shadowColor = glowColor;
+  ctx.shadowBlur = 6;
+
+  // Draw as a small square (item placeholder)
+  ctx.fillStyle = glowColor;
+  ctx.fillRect(
+    screen.x - size / 2,
+    screen.y - size / 2 + bob,
+    size, size
+  );
+
+  // Inner highlight
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+  ctx.fillRect(
+    screen.x - size / 4,
+    screen.y - size / 4 + bob,
+    size / 2, size / 2
+  );
+
+  ctx.shadowBlur = 0;
+}
+
+function renderEnemy(ctx: CanvasRenderingContext2D, camera: Camera, enemy: EnemyState) {
+  const screen = worldToScreen(camera, enemy.x, enemy.y);
+  const tileSize = getEffectiveTileSize(camera);
+  const radius = tileSize * 0.5; // Larger than players (1.5x)
+
+  // Don't render if dead (could show corpse with low opacity)
+  if (!enemy.isAlive) {
+    // Fading corpse
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = '#2a1a1a';
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y + radius * 0.2, radius * 0.7, radius * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    return;
+  }
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+  ctx.beginPath();
+  ctx.ellipse(screen.x + 1, screen.y + radius * 0.5, radius * 0.6, radius * 0.2, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body — dark brown oval (larger than player circles)
+  ctx.fillStyle = '#3a2a1a';
+  ctx.beginPath();
+  ctx.ellipse(screen.x, screen.y, radius * 0.7, radius, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Border
+  ctx.strokeStyle = '#2a1a0a';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Eye (small orange dot) — slight bob animation
+  const bobY = Math.sin(Date.now() * 0.003 + enemy.x * 2) * 1.5;
+  ctx.fillStyle = '#c08030';
+  ctx.beginPath();
+  ctx.arc(screen.x + radius * 0.15, screen.y - radius * 0.3 + bobY, tileSize * 0.06, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tagged indicator (red glow when someone is fighting this enemy)
+  if (enemy.taggedBy) {
+    ctx.strokeStyle = `rgba(200, 50, 50, ${0.4 + Math.sin(Date.now() * 0.005) * 0.2})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y, radius * 0.8, radius * 1.1, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // HP bar (only show when damaged)
+  if (enemy.health < enemy.maxHealth) {
+    const barWidth = tileSize * 0.8;
+    const barHeight = 3;
+    const barX = screen.x - barWidth / 2;
+    const barY = screen.y - radius - 6;
+    const hpPct = enemy.health / enemy.maxHealth;
+
+    // Background
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2);
+
+    // HP fill
+    ctx.fillStyle = hpPct > 0.5 ? '#6a3030' : '#a02020';
+    ctx.fillRect(barX, barY, barWidth * hpPct, barHeight);
+  }
+}
+
+function renderProjectile(ctx: CanvasRenderingContext2D, camera: Camera, proj: ProjectileState) {
+  const screen = worldToScreen(camera, proj.x, proj.y);
+  const tileSize = getEffectiveTileSize(camera);
+
+  // Different visual per ability type
+  switch (proj.subType) {
+    case 'ember_spray': {
+      // Small orange-red circle with glow
+      const radius = tileSize * 0.12;
+      ctx.shadowColor = '#ff6020';
+      ctx.shadowBlur = 4;
+      ctx.fillStyle = '#ff8040';
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      break;
+    }
+    case 'void_bolt': {
+      // Larger purple circle with strong glow
+      const radius = tileSize * 0.18;
+      ctx.shadowColor = '#8040ff';
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = '#a060ff';
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      break;
+    }
+    default: {
+      // Generic white dot
+      const radius = tileSize * 0.1;
+      ctx.fillStyle = '#e0e0e0';
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+  }
 }
 
 function renderLandmarkLabels(

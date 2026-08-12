@@ -30,6 +30,7 @@
 
 using System.Text.Json.Serialization;
 using Carcosa.Server.Game;
+using Carcosa.Server.Gameplay;
 using Carcosa.Server.Network;
 using Carcosa.Server.Cryptol;
 using Carcosa.Server.P2P;
@@ -129,6 +130,20 @@ builder.Services.AddSingleton(new PeerMesh(peerIdentity));
 builder.Services.AddSingleton(sp => new OverworldSync(
     sp.GetRequiredService<PeerMesh>(),
     sp.GetRequiredService<PeerIdentity>()));
+builder.Services.AddSingleton(sp => new ShardHostManager(
+    sp.GetRequiredService<PeerMesh>(),
+    sp.GetRequiredService<PeerIdentity>()));
+builder.Services.AddSingleton<EnemySpawner>();
+builder.Services.AddSingleton<LootDropManager>();
+builder.Services.AddSingleton<PlayerInventory>();
+builder.Services.AddSingleton(sp => new OverworldCombatSync(
+    sp.GetRequiredService<PeerMesh>(),
+    sp.GetRequiredService<PeerIdentity>(),
+    sp.GetRequiredService<ShardHostManager>(),
+    sp.GetRequiredService<EnemySpawner>(),
+    sp.GetRequiredService<OverworldSync>(),
+    sp.GetRequiredService<LootDropManager>(),
+    sp.GetRequiredService<PlayerInventory>()));
 builder.Services.AddSingleton(sp => new PeerExchange(
     sp.GetRequiredService<PeerMesh>(),
     sp.GetRequiredService<PeerIdentity>()));
@@ -179,8 +194,8 @@ if (dungeonSeed.HasValue && dungeonScenario != null)
     Console.WriteLine($"[Dungeon Instance] Seed: {dungeonSeed.Value}, Scenario: {dungeonScenario}");
     sessionManager.SelectedScenario = dungeonScenario switch
     {
-        "temple" => MapScenario.Temple,
-        _ => MapScenario.Warehouse,
+        "temple" => MapScenario.PallidSanctum,
+        _ => MapScenario.DrownedDock,
     };
 
     // Pre-generate the map from the seed
@@ -188,7 +203,7 @@ if (dungeonSeed.HasValue && dungeonScenario != null)
     gameLoop.State.Scenario = sessionManager.SelectedScenario;
     gameLoop.State.Map = sessionManager.SelectedScenario switch
     {
-        MapScenario.Temple => MapGenerator.GenerateTemple(100, 100, mapSeed),
+        MapScenario.PallidSanctum => MapGenerator.GenerateTemple(100, 100, mapSeed),
         _ => MapGenerator.Generate(80, 60, mapSeed),
     };
     Console.WriteLine($"[Dungeon Instance] Map generated: {gameLoop.State.Map.Width}x{gameLoop.State.Map.Height}");
@@ -233,6 +248,10 @@ Console.WriteLine($"[P2P:Init] World: {peerIdentity.WorldId}");
 Console.WriteLine($"[P2P:Init] Public Address: {peerIdentity.PublicAddress}");
 
 overworldSync.Start();
+
+// Start the overworld combat sync (enemy AI, projectile processing, P2P combat)
+var combatSync = app.Services.GetRequiredService<OverworldCombatSync>();
+combatSync.Start();
 
 // Start Peer Exchange (periodic sharing of known peer lists for mesh discovery)
 var peerExchange = app.Services.GetRequiredService<PeerExchange>();
@@ -544,7 +563,7 @@ app.MapGet("/api/p2p/players", (OverworldSync sync) =>
 
 // Update local player position (called by frontend at 20Hz for mesh broadcast)
 var p2pPositionCallCount = 0;
-app.MapPost("/api/p2p/position", (P2PPositionUpdate update, OverworldSync sync) =>
+app.MapPost("/api/p2p/position", (P2PPositionUpdate update, OverworldSync sync, OverworldCombatSync combat) =>
 {
     var count = Interlocked.Increment(ref p2pPositionCallCount);
     if (count <= 3 || count % 200 == 0)
@@ -552,6 +571,7 @@ app.MapPost("/api/p2p/position", (P2PPositionUpdate update, OverworldSync sync) 
         Console.WriteLine($"[P2P:API] POST /api/p2p/position (call #{count}) → ({update.X:F1}, {update.Y:F1})");
     }
     sync.UpdateLocalPosition(update.X, update.Y, update.VelocityX, update.VelocityY);
+    combat.UpdateLocalPlayerPosition(update.X, update.Y);
     return Results.Ok();
 });
 
@@ -668,6 +688,126 @@ app.MapPost("/api/p2p/shard/switch", async (ShardSwitchRequest request, WorldSha
 
     await shard.SwitchShardAsync(request.ShardId);
     return Results.Ok(new P2PMessageResponse($"Switched to shard {request.ShardId}", request.ShardId));
+});
+
+// =============================================================================
+// GAMEPLAY API ENDPOINTS (Phase B — Combat, Enemies, Player Stats)
+// =============================================================================
+// These endpoints support the overworld combat system. The frontend polls these
+// at 10Hz for responsive combat UI (stamina bar, enemy positions, cooldowns).
+
+// Get local player stats (HP, stamina, abilities, cooldowns) — polled at 10Hz by frontend
+app.MapGet("/api/gameplay/player-stats", (OverworldCombatSync combat) =>
+{
+    var p = combat.LocalPlayer;
+    return Results.Ok(new PlayerStatsResponse(
+        Hp: p.Health, MaxHp: p.MaxHealth,
+        Stamina: p.Stamina, MaxStamina: p.MaxStamina,
+        IsStaminaDepleted: p.IsStaminaDepleted,
+        Level: p.Level, Xp: p.XP,
+        PrimaryAbility: p.PrimaryAbility, SecondaryAbility: p.SecondaryAbility,
+        PrimaryCooldown: p.PrimaryFireCooldown, SecondaryCooldown: p.SecondaryAbilityCooldown,
+        ShieldHp: p.ShieldHP, IsShardHost: combat.IsHost));
+});
+
+// Get all enemies (for frontend rendering) — polled at 10Hz
+app.MapGet("/api/gameplay/enemies", (OverworldCombatSync combat) =>
+{
+    var enemies = combat.GetEnemiesForRendering();
+    var entries = enemies.Select(e => new EnemyStateEntry(
+        e.Id, e.SubType, e.X, e.Y, e.VelocityX, e.VelocityY,
+        e.Health, e.MaxHealth, e.IsAlive, e.TaggedBy)).ToArray();
+    return Results.Ok(new EnemyListResponse(entries));
+});
+
+// Get active projectiles (for frontend rendering) — polled at 10Hz
+app.MapGet("/api/gameplay/projectiles", (OverworldCombatSync combat) =>
+{
+    var projectiles = combat.GetProjectilesForRendering();
+    var entries = projectiles.Select(p => new ProjectileEntry(
+        p.Id, p.SubType, p.X, p.Y, p.VelocityX, p.VelocityY)).ToArray();
+    return Results.Ok(new ProjectileListResponse(entries));
+});
+
+// Execute a combat action (ability use) — called by frontend on click
+app.MapPost("/api/gameplay/combat-action", async (CombatActionRequest request, OverworldCombatSync combat) =>
+{
+    if (string.IsNullOrWhiteSpace(request.AbilitySlot))
+        return Results.BadRequest(new CombatActionResponse(false, "abilitySlot is required"));
+
+    var success = await combat.ProcessLocalCombatActionAsync(request.AbilitySlot, request.AimAngle);
+    return Results.Ok(new CombatActionResponse(success, success ? null : "Ability failed (cooldown or stamina)"));
+});
+
+// Get player inventory (equipment + backpack)
+app.MapGet("/api/gameplay/inventory", (PlayerInventory inventory) =>
+{
+    var equipment = new InventorySlotEntry?[4];
+    var slots = new[] { ItemSlot.Weapon, ItemSlot.Armor, ItemSlot.Trinket, ItemSlot.Boots };
+    for (int i = 0; i < 4; i++)
+    {
+        var item = inventory.GetEquipped(slots[i]);
+        if (item != null)
+        {
+            var def = Carcosa.Server.Gameplay.ItemRegistry.GetItem(item.ItemId);
+            equipment[i] = new InventorySlotEntry(item.ItemId, item.Quantity, def?.Name, def?.Rarity.ToString(), def?.Slot.ToString());
+        }
+    }
+
+    var backpack = new InventorySlotEntry?[PlayerInventory.BackpackSize];
+    for (int i = 0; i < PlayerInventory.BackpackSize; i++)
+    {
+        var bp = inventory.Backpack[i];
+        if (bp != null)
+        {
+            var def = Carcosa.Server.Gameplay.ItemRegistry.GetItem(bp.ItemId);
+            backpack[i] = new InventorySlotEntry(bp.ItemId, bp.Quantity, def?.Name, def?.Rarity.ToString(), def?.Slot.ToString());
+        }
+    }
+
+    return Results.Ok(new InventoryResponse(equipment, backpack));
+});
+
+// Equip an item from backpack slot
+app.MapPost("/api/gameplay/equip", (EquipRequest request, PlayerInventory inventory, OverworldCombatSync combat) =>
+{
+    var success = inventory.EquipFromBackpack(request.BackpackSlot, combat.LocalPlayer);
+    return Results.Ok(new CombatActionResponse(success, success ? null : "Cannot equip item"));
+});
+
+// Pick up loot from ground
+app.MapPost("/api/gameplay/pickup-loot", (PickupLootRequest request, LootDropManager lootManager, PlayerInventory inventory, PeerIdentity identity) =>
+{
+    var drop = lootManager.TryPickUp(request.DropId, identity.PeerId);
+    if (drop == null)
+        return Results.Ok(new PickupLootResponse(false, null, "Drop not found or not eligible"));
+
+    if (!inventory.AddItem(drop.ItemId, drop.Quantity))
+        return Results.Ok(new PickupLootResponse(false, null, "Inventory full"));
+
+    return Results.Ok(new PickupLootResponse(true, drop.ItemId, null));
+});
+
+// Get visible loot drops for this player
+app.MapGet("/api/gameplay/loot-drops", (LootDropManager lootManager, PeerIdentity identity) =>
+{
+    var drops = lootManager.GetDropsForPeer(identity.PeerId);
+    var entries = drops.Select(d =>
+    {
+        var def = Carcosa.Server.Gameplay.ItemRegistry.GetItem(d.ItemId);
+        return new LootDropEntry(d.DropId, d.ItemId, def?.Name ?? "Unknown", d.Rarity.ToString(), d.Quantity, d.X, d.Y);
+    }).ToArray();
+    return Results.Ok(new LootDropsResponse(entries));
+});
+
+// Swap abilities at a Meditation Altar
+app.MapPost("/api/gameplay/swap-abilities", (SwapAbilitiesRequest request, OverworldCombatSync combat) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Primary) || string.IsNullOrWhiteSpace(request.Secondary))
+        return Results.BadRequest(new CombatActionResponse(false, "primary and secondary required"));
+
+    combat.SetAbilities(request.Primary, request.Secondary);
+    return Results.Ok(new CombatActionResponse(true, null));
 });
 
 // WHY: Static file serving for the embedded Next.js frontend.
@@ -936,6 +1076,47 @@ internal record P2PShardResponse(
 internal record P2PPositionUpdate(float X, float Y, float VelocityX, float VelocityY);
 internal record P2PNameRequest(string Name);
 
+// =============================================================================
+// GAMEPLAY API TYPES (Phase B — Combat, Enemies, Player Stats)
+// =============================================================================
+
+/// <summary>Request body for POST /api/gameplay/combat-action.</summary>
+internal record CombatActionRequest(string AbilitySlot, float AimAngle);
+
+/// <summary>Response for GET /api/gameplay/player-stats.</summary>
+internal record PlayerStatsResponse(
+    int Hp, int MaxHp, float Stamina, float MaxStamina, bool IsStaminaDepleted,
+    int Level, int Xp, string PrimaryAbility, string SecondaryAbility,
+    int PrimaryCooldown, int SecondaryCooldown, int ShieldHp, bool IsShardHost);
+
+/// <summary>Single enemy entry for GET /api/gameplay/enemies response.</summary>
+internal record EnemyStateEntry(
+    string Id, string SubType, float X, float Y, float VelocityX, float VelocityY,
+    int Health, int MaxHealth, bool IsAlive, string? TaggedBy);
+
+/// <summary>Response for GET /api/gameplay/enemies.</summary>
+internal record EnemyListResponse(EnemyStateEntry[] Enemies);
+
+/// <summary>Single projectile entry for rendering.</summary>
+internal record ProjectileEntry(
+    string Id, string SubType, float X, float Y, float VelocityX, float VelocityY);
+
+/// <summary>Response for GET /api/gameplay/projectiles.</summary>
+internal record ProjectileListResponse(ProjectileEntry[] Projectiles);
+
+/// <summary>Result of a combat action.</summary>
+internal record CombatActionResponse(bool Success, string? Message);
+
+// --- Inventory/Loot API Types ---
+internal record InventorySlotEntry(string? ItemId, int Quantity, string? ItemName, string? Rarity, string? Slot);
+internal record InventoryResponse(InventorySlotEntry?[] Equipment, InventorySlotEntry?[] Backpack);
+internal record EquipRequest(int BackpackSlot);
+internal record PickupLootRequest(string DropId);
+internal record PickupLootResponse(bool Success, string? ItemId, string? Message);
+internal record LootDropEntry(string DropId, string ItemId, string ItemName, string Rarity, int Quantity, float X, float Y);
+internal record LootDropsResponse(LootDropEntry[] Drops);
+internal record SwapAbilitiesRequest(string Primary, string Secondary);
+
 /// <summary>
 /// Source-generated JSON context for HTTP API response types.
 /// AOT REQUIREMENT: Without this, the minimal API serializer would need runtime
@@ -965,6 +1146,25 @@ internal record P2PNameRequest(string Name);
 [JsonSerializable(typeof(P2PShardResponse))]
 [JsonSerializable(typeof(P2PPositionUpdate))]
 [JsonSerializable(typeof(P2PNameRequest))]
+[JsonSerializable(typeof(CombatActionRequest))]
+[JsonSerializable(typeof(PlayerStatsResponse))]
+[JsonSerializable(typeof(EnemyStateEntry))]
+[JsonSerializable(typeof(EnemyStateEntry[]))]
+[JsonSerializable(typeof(EnemyListResponse))]
+[JsonSerializable(typeof(ProjectileEntry))]
+[JsonSerializable(typeof(ProjectileEntry[]))]
+[JsonSerializable(typeof(ProjectileListResponse))]
+[JsonSerializable(typeof(CombatActionResponse))]
+[JsonSerializable(typeof(InventorySlotEntry))]
+[JsonSerializable(typeof(InventorySlotEntry[]))]
+[JsonSerializable(typeof(InventoryResponse))]
+[JsonSerializable(typeof(EquipRequest))]
+[JsonSerializable(typeof(PickupLootRequest))]
+[JsonSerializable(typeof(PickupLootResponse))]
+[JsonSerializable(typeof(LootDropEntry))]
+[JsonSerializable(typeof(LootDropEntry[]))]
+[JsonSerializable(typeof(LootDropsResponse))]
+[JsonSerializable(typeof(SwapAbilitiesRequest))]
 [JsonSerializable(typeof(List<AvailableSession>))]
 [JsonSerializable(typeof(AvailableSession))]
 internal partial class AppJsonContext : JsonSerializerContext

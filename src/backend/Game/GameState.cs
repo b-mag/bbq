@@ -61,7 +61,7 @@ public sealed class GameState
     public int CurrentWave { get; set; }
 
     /// <summary>Which map scenario is being played. Affects map generation and wave rules.</summary>
-    public MapScenario Scenario { get; set; } = MapScenario.Warehouse;
+    public MapScenario Scenario { get; set; } = MapScenario.DrownedDock;
 
     /// <summary>Ticks remaining until next wave starts (during intermission).</summary>
     public int WaveCountdownTicks { get; set; }
@@ -182,20 +182,28 @@ public enum GamePhase
 
 /// <summary>
 /// Map scenario selection. Determines map layout, wave rules, and victory conditions.
+/// Names follow the Carcosa dark fantasy theme.
 /// </summary>
 public enum MapScenario
 {
     /// <summary>
-    /// The Warehouse — BSP-generated rooms/corridors, 5 waves + boss.
-    /// Standard co-op mode with a clear win condition.
+    /// The Drowned Dock — BSP-generated rooms/corridors, 5 waves + boss.
+    /// A waterlogged fishing village dungeon. Standard co-op with a clear win condition.
+    /// (Formerly "The Warehouse")
     /// </summary>
-    Warehouse,
+    DrownedDock,
     /// <summary>
-    /// The Temple — Large open arena, endless escalating waves.
-    /// Vampire Survivors-style survival until all players die.
-    /// Cryptol awarded per wave survived (10 per wave).
+    /// The Pallid Sanctum — Large open arena, endless escalating waves.
+    /// King in Yellow vibes. Survival until all players fall.
+    /// Pale Marks awarded per wave survived (10 per wave).
+    /// (Formerly "The Temple")
     /// </summary>
-    Temple
+    PallidSanctum,
+    /// <summary>
+    /// The Hollow — Generic cave dungeon. BSP-generated, 3 waves + mini-boss.
+    /// Shorter dungeon for quick runs.
+    /// </summary>
+    Hollow
 }
 
 // =============================================================================

@@ -29,6 +29,19 @@ export default function P2POverlay({ status, shard, glyph, onGlyphConnect }: P2P
   const [showGlyphPanel, setShowGlyphPanel] = useState(false);
   const [copied, setCopied] = useState(false);
   const [adminMessage, setAdminMessage] = useState<string | null>(null);
+  const [dismissedMessageIds, setDismissedMessageIds] = useState<Set<string>>(new Set());
+
+  // ESC dismisses admin message
+  useEffect(() => {
+    if (!adminMessage) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setAdminMessage(null);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [adminMessage]);
 
   // Poll for admin messages
   useEffect(() => {
@@ -38,12 +51,16 @@ export default function P2POverlay({ status, shard, glyph, onGlyphConnect }: P2P
         if (res.ok) {
           const data: Array<{ messageId: string; message: string; priority: string; durationSeconds: number; timestamp: number }> = await res.json();
           if (data.length > 0) {
-            // Show the most recent message
+            // Show the most recent message that hasn't been dismissed
             const latest = data[data.length - 1];
-            if (latest.message !== adminMessage) {
+            if (!dismissedMessageIds.has(latest.messageId) && latest.message !== adminMessage) {
               setAdminMessage(latest.message);
               // Auto-dismiss after duration
-              setTimeout(() => setAdminMessage(null), (latest.durationSeconds || 15) * 1000);
+              const duration = (latest.durationSeconds || 15) * 1000;
+              setTimeout(() => {
+                setAdminMessage(null);
+                setDismissedMessageIds(prev => new Set([...prev, latest.messageId]));
+              }, duration);
             }
           }
         }
@@ -52,7 +69,7 @@ export default function P2POverlay({ status, shard, glyph, onGlyphConnect }: P2P
     const interval = setInterval(poll, 5000);
     poll();
     return () => clearInterval(interval);
-  }, [adminMessage]);
+  }, [adminMessage, dismissedMessageIds]);
 
   const handleGlyphConnect = async () => {
     if (!glyphInput.trim()) return;
@@ -182,8 +199,18 @@ export default function P2POverlay({ status, shard, glyph, onGlyphConnect }: P2P
           textAlign: 'center', maxWidth: '80%',
           animation: 'fadeIn 0.3s ease-in',
         }}>
+          {/* Dismiss X button */}
+          <button
+            onClick={() => setAdminMessage(null)}
+            style={{
+              position: 'absolute', top: 4, right: 8,
+              background: 'none', border: 'none', color: '#6a5d4a',
+              cursor: 'pointer', fontSize: '1rem', lineHeight: 1,
+            }}
+          >✕</button>
           <div style={{ color: '#c9a84c', fontSize: '0.7rem', marginBottom: 6 }}>ADMIN MESSAGE</div>
           {adminMessage}
+          <div style={{ color: '#6a5d4a', fontSize: '0.55rem', marginTop: 6 }}>Press ESC or click ✕ to dismiss</div>
         </div>
       )}
     </>

@@ -320,3 +320,150 @@ public sealed class PeerKeepaliveAckPayload
     /// <summary>Responder's timestamp (for clock drift estimation).</summary>
     public long Timestamp { get; set; }
 }
+
+// =============================================================================
+// COMBAT SYNC PAYLOADS (Phase B — Overworld Combat)
+// =============================================================================
+// These payloads enable real-time combat in the P2P overworld. The shard host
+// processes combat actions, runs enemy AI, and broadcasts results to all peers.
+
+/// <summary>
+/// Sent by a non-host peer when their player uses an ability.
+/// The shard host receives this, processes the ability against overworld enemies,
+/// and broadcasts PeerDamageEvent results to all peers.
+/// 
+/// Also sent by the host to itself (local processing) — same data structure
+/// allows uniform handling regardless of host/non-host status.
+/// </summary>
+public sealed class PeerCombatActionPayload
+{
+    /// <summary>Peer ID of the player performing the combat action.</summary>
+    public required string PeerId { get; init; }
+
+    /// <summary>Ability ID being used (e.g., "ember_spray", "void_bolt").</summary>
+    public required string AbilityId { get; init; }
+
+    /// <summary>Aim angle in radians (0 = right, π/2 = down). Direction the ability fires toward.</summary>
+    public float AimAngle { get; set; }
+
+    /// <summary>Player X position when the ability was used (for server-side validation).</summary>
+    public float SourceX { get; set; }
+
+    /// <summary>Player Y position when the ability was used.</summary>
+    public float SourceY { get; set; }
+
+    /// <summary>UTC timestamp when the action was performed (for lag compensation).</summary>
+    public long Timestamp { get; set; }
+}
+
+/// <summary>
+/// Broadcast by the shard host at 10Hz (every 2nd tick) containing all enemy positions.
+/// Non-host peers use this to render enemies in their correct positions.
+/// 
+/// WHY 10Hz (not 20Hz): Enemies move slowly (1.5-3 tiles/sec). 10Hz provides smooth
+/// enough updates while halving combat sync bandwidth. Client-side interpolation
+/// fills the gaps using velocity hints.
+/// </summary>
+public sealed class PeerEnemySyncPayload
+{
+    /// <summary>Array of all enemy entity states for rendering on non-host peers.</summary>
+    public required PeerEnemySyncEntry[] Enemies { get; init; }
+
+    /// <summary>Active projectiles for rendering on non-host peers. Null if no projectiles.</summary>
+    public PeerProjectileSyncEntry[]? Projectiles { get; set; }
+}
+
+/// <summary>
+/// State of a single projectile as broadcast by the shard host.
+/// Allows non-host peers to render ability effects (ember spray, void bolt, etc.).
+/// </summary>
+public sealed class PeerProjectileSyncEntry
+{
+    /// <summary>Unique projectile ID.</summary>
+    public required string Id { get; init; }
+
+    /// <summary>Ability that created this projectile (for visual rendering).</summary>
+    public string SubType { get; set; } = "";
+
+    /// <summary>World X position.</summary>
+    public float X { get; set; }
+
+    /// <summary>World Y position.</summary>
+    public float Y { get; set; }
+
+    /// <summary>Velocity X (for interpolation).</summary>
+    public float VelocityX { get; set; }
+
+    /// <summary>Velocity Y.</summary>
+    public float VelocityY { get; set; }
+}
+
+/// <summary>
+/// State of a single enemy entity as broadcast by the shard host.
+/// Contains everything a non-host peer needs to render and display the enemy.
+/// </summary>
+public sealed class PeerEnemySyncEntry
+{
+    /// <summary>Unique enemy entity ID.</summary>
+    public required string Id { get; init; }
+
+    /// <summary>Enemy sub-type (e.g., "gronk") for rendering.</summary>
+    public string SubType { get; set; } = "";
+
+    /// <summary>World X position (tile coordinates).</summary>
+    public float X { get; set; }
+
+    /// <summary>World Y position.</summary>
+    public float Y { get; set; }
+
+    /// <summary>Velocity X (for interpolation between sync updates).</summary>
+    public float VelocityX { get; set; }
+
+    /// <summary>Velocity Y.</summary>
+    public float VelocityY { get; set; }
+
+    /// <summary>Current health (for HP bar display).</summary>
+    public int Health { get; set; }
+
+    /// <summary>Maximum health (for HP bar percentage).</summary>
+    public int MaxHealth { get; set; }
+
+    /// <summary>Whether the enemy is alive (dead = show corpse).</summary>
+    public bool IsAlive { get; set; }
+
+    /// <summary>Peer ID of the player who tagged this enemy (for loot rights indicator).</summary>
+    public string? TaggedBy { get; set; }
+}
+
+/// <summary>
+/// Broadcast by the shard host whenever damage is dealt to any entity.
+/// All peers use this for visual feedback (damage numbers, hit effects).
+/// Also broadcast when an enemy dies (IsKill = true) for death animations.
+/// 
+/// WHY SEPARATE FROM ENEMY SYNC: DamageEvent is immediate (fired on the tick
+/// damage occurs) while EnemySync is periodic (every 2nd tick). Separating them
+/// ensures damage feedback is instant regardless of sync cycle timing.
+/// </summary>
+public sealed class PeerDamageEventPayload
+{
+    /// <summary>Peer ID of the player who dealt the damage (for kill attribution).</summary>
+    public required string SourcePeerId { get; init; }
+
+    /// <summary>Entity ID of the target that was hit (enemy or player).</summary>
+    public required string TargetEntityId { get; init; }
+
+    /// <summary>Amount of damage dealt (after defense reduction).</summary>
+    public int Damage { get; set; }
+
+    /// <summary>Target's health after this damage was applied.</summary>
+    public int NewHealth { get; set; }
+
+    /// <summary>True if this damage killed the target (triggers death animation).</summary>
+    public bool IsKill { get; set; }
+
+    /// <summary>World X position where the hit occurred (for floating damage numbers).</summary>
+    public float X { get; set; }
+
+    /// <summary>World Y position where the hit occurred.</summary>
+    public float Y { get; set; }
+}

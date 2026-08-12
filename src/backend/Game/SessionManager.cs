@@ -48,7 +48,7 @@ public sealed class SessionManager
     public SessionState State { get; private set; } = SessionState.Lobby;
     public int MaxPlayers { get; set; } = 8;
     /// <summary>Selected scenario for this session. Set by host in lobby.</summary>
-    public MapScenario SelectedScenario { get; set; } = MapScenario.Warehouse;
+    public MapScenario SelectedScenario { get; set; } = MapScenario.DrownedDock;
     /// <summary>Player ID of the invader (if one has joined). Null if no invader.</summary>
     public string? InvaderId { get; private set; }
 
@@ -185,7 +185,7 @@ public sealed class SessionManager
             _gameLoop.State.Scenario = SelectedScenario;
             _gameLoop.State.Map = SelectedScenario switch
             {
-                MapScenario.Temple => MapGenerator.GenerateTemple(100, 100, seed),
+                MapScenario.PallidSanctum => MapGenerator.GenerateTemple(100, 100, seed),
                 _ => MapGenerator.Generate(80, 60, seed) // Warehouse (default)
             };
             _gameLoop.State.Phase = GamePhase.Playing;
@@ -316,7 +316,7 @@ public sealed class SessionManager
             // Warehouse Defeat (all players died): 10 Cryptol each (consolation)
             // Temple (always defeat — endless mode): 10 Cryptol per wave survived
             int amount;
-            if (_gameLoop.State.Scenario == MapScenario.Temple)
+            if (_gameLoop.State.Scenario == MapScenario.PallidSanctum)
             {
                 amount = _gameLoop.State.CurrentWave * 10; // 10 per wave survived
             }
@@ -405,8 +405,8 @@ public sealed class SessionManager
                     {
                         SelectedScenario = message.SessionAction.Value switch
                         {
-                            "temple" => MapScenario.Temple,
-                            _ => MapScenario.Warehouse
+                            "temple" => MapScenario.PallidSanctum,
+                            _ => MapScenario.DrownedDock
                         };
                         Console.WriteLine($"[Session] Scenario set to {SelectedScenario}");
                         BroadcastSessionInfo();
@@ -454,7 +454,12 @@ public sealed class SessionManager
                 }).ToArray(),
                 MaxPlayers = MaxPlayers,
                 CurrentWave = _gameLoop.State.CurrentWave,
-                Scenario = SelectedScenario == MapScenario.Temple ? "temple" : "warehouse"
+                Scenario = SelectedScenario switch
+                {
+                    MapScenario.PallidSanctum => "pallid_sanctum",
+                    MapScenario.Hollow => "hollow",
+                    _ => "drowned_dock"
+                }
             };
         }
     }

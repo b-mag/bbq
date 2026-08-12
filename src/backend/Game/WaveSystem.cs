@@ -102,7 +102,7 @@ public sealed class WaveSystem
         if (EnemiesRemaining == 0 && _spawnQueueRemaining == 0 && CurrentWave > 0)
         {
             // Temple scenario: endless waves, never complete
-            if (state.Scenario == MapScenario.Temple)
+            if (state.Scenario == MapScenario.PallidSanctum)
             {
                 // Brief intermission between endless waves (shorter than Warehouse)
                 state.Phase = GamePhase.WaveIntermission;

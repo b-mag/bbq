@@ -18,7 +18,17 @@ import { OverworldGameMap, decodeOverworldMap } from '@/lib/overworld-map';
 import OverworldCanvas from './OverworldCanvas';
 import OverworldChat from './OverworldChat';
 import P2POverlay from './P2POverlay';
+import HealthBar from './HealthBar';
+import StaminaBar from './StaminaBar';
+import AbilityBar from './AbilityBar';
+import QuitMenu from './QuitMenu';
+import InventoryPanel from './InventoryPanel';
+import AbilitySelectPanel from './AbilitySelectPanel';
+import SaveIndicator from './SaveIndicator';
 import { useP2POverworld } from '@/hooks/useP2POverworld';
+import { usePlayerStats } from '@/hooks/usePlayerStats';
+import { useOverworldEnemies } from '@/hooks/useOverworldEnemies';
+import { handleEscape, pushPanel, removePanel, isOpen } from '@/lib/ui-stack';
 
 interface OverworldViewProps {
   playerName: string;
@@ -37,10 +47,49 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
   const [pendingInvite, setPendingInvite] = useState<{ partyId: string; inviterName: string } | null>(null);
   const [chatFocused, setChatFocused] = useState(false);
 
+  // UI panel state (managed by ui-stack for ESC dismissal)
+  const [showQuitMenu, setShowQuitMenu] = useState(false);
+  const [showInventory, setShowInventory] = useState(false);
+  const [showAbilitySelect, setShowAbilitySelect] = useState(false);
+
   const playersRef = useRef<Map<string, OwPlayerState>>(new Map());
 
   // P2P mesh state (from local game server)
   const p2p = useP2POverworld();
+
+  // Player combat stats (HP, stamina, abilities, cooldowns)
+  const stats = usePlayerStats();
+
+  // Enemy and projectile state for rendering
+  const { enemies, projectiles, lootDrops } = useOverworldEnemies();
+
+  // Global keydown handler for ESC (layered dismiss) and I (inventory)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (chatFocused) return; // Don't intercept keys while typing in chat
+
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (showInventory) { setShowInventory(false); removePanel('inventory'); }
+        else if (showAbilitySelect) { setShowAbilitySelect(false); removePanel('ability-select'); }
+        else if (showQuitMenu) { setShowQuitMenu(false); removePanel('quit-menu'); }
+        else { setShowQuitMenu(true); pushPanel('quit-menu'); }
+      }
+
+      if (e.key === 'i' || e.key === 'I') {
+        if (!showInventory && !showAbilitySelect && !showQuitMenu) {
+          setShowInventory(true);
+          pushPanel('inventory');
+        } else if (showInventory) {
+          setShowInventory(false);
+          removePanel('inventory');
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [chatFocused, showInventory, showAbilitySelect, showQuitMenu]);
 
   const ws = useOverworldSocket({ playerName });
 
@@ -277,21 +326,37 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         dungeonEntrances={dungeonEntrances}
         worldObjects={worldObjects}
         landmarks={landmarks}
+        enemies={enemies}
+        projectiles={projectiles}
+        lootDrops={lootDrops}
         width={typeof window !== 'undefined' ? window.innerWidth : 1280}
         height={typeof window !== 'undefined' ? window.innerHeight : 720}
         onPlayerClick={handleInvitePlayer}
       />
 
-      {/* Top-left: Player info & ping */}
-      <div style={{
-        position: 'absolute', top: 12, left: 12, padding: '8px 12px',
-        background: 'rgba(13, 15, 7, 0.85)', border: '1px solid #3a3520',
-        borderRadius: 4, color: '#e8dcc8', fontSize: '0.75rem',
-      }}>
-        <div style={{ color: '#c9a84c', fontWeight: 'bold' }}>{playerName}</div>
-        <div style={{ color: '#6a5d4a', marginTop: 2 }}>Ping: {ws.latency}ms</div>
-        <div style={{ color: '#6a5d4a' }}>Players: {players.filter(p => p.status !== 'in_dungeon').length}</div>
-      </div>
+      {/* HP Bar (top-left) */}
+      <HealthBar hp={stats.hp} maxHp={stats.maxHp} level={stats.level} />
+
+      {/* Stamina Bar (below HP) */}
+      <StaminaBar
+        stamina={stats.stamina}
+        maxStamina={stats.maxStamina}
+        isDepleted={stats.isStaminaDepleted}
+        shieldHp={stats.shieldHp}
+      />
+
+      {/* Ability Bar (bottom-center) */}
+      <AbilityBar
+        primaryAbility={stats.primaryAbility}
+        secondaryAbility={stats.secondaryAbility}
+        primaryCooldown={stats.primaryCooldown}
+        secondaryCooldown={stats.secondaryCooldown}
+        stamina={stats.stamina}
+        isDepleted={stats.isStaminaDepleted}
+      />
+
+      {/* Auto-save indicator (top-center, appears briefly every 60s) */}
+      <SaveIndicator />
 
       {/* Party panel (top-right) */}
       {party && (
@@ -358,7 +423,7 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         background: 'rgba(13, 15, 7, 0.7)', borderRadius: 4,
         color: '#6a5d4a', fontSize: '0.65rem',
       }}>
-        WASD: Move | E: Interact | Scroll: Zoom | Click player: Invite | Enter: Chat
+        WASD: Move | LMB: Attack | RMB: Secondary | E: Interact | Scroll: Zoom | Enter: Chat
       </div>
 
       {/* P2P Mesh overlay (shard info, Glyph, peer count) */}
@@ -369,14 +434,38 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         onGlyphConnect={p2p.connectViaGlyph}
       />
 
-      {/* Disconnect button */}
-      <button onClick={onDisconnect} style={{
-        position: 'absolute', bottom: 12, right: 12, padding: '6px 12px',
-        background: 'rgba(80, 30, 30, 0.8)', border: '1px solid #6a3030',
-        borderRadius: 4, color: '#a85050', cursor: 'pointer', fontSize: '0.7rem',
-      }}>
-        Disconnect
-      </button>
+      {/* Quit Menu (ESC when nothing open) */}
+      {showQuitMenu && (
+        <QuitMenu
+          onConfirm={onDisconnect}
+          onCancel={() => { setShowQuitMenu(false); removePanel('quit-menu'); }}
+        />
+      )}
+
+      {/* Inventory Panel (I key) */}
+      {showInventory && (
+        <InventoryPanel
+          onClose={() => { setShowInventory(false); removePanel('inventory'); }}
+        />
+      )}
+
+      {/* Ability Select Panel (Meditation Altar interaction) */}
+      {showAbilitySelect && (
+        <AbilitySelectPanel
+          currentPrimary={stats.primaryAbility}
+          currentSecondary={stats.secondaryAbility}
+          onConfirm={async (primary, secondary) => {
+            await fetch('/api/gameplay/swap-abilities', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ primary, secondary }),
+            });
+            setShowAbilitySelect(false);
+            removePanel('ability-select');
+          }}
+          onClose={() => { setShowAbilitySelect(false); removePanel('ability-select'); }}
+        />
+      )}
     </div>
   );
 }

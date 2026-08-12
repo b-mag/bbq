@@ -33,6 +33,13 @@ namespace Carcosa.Server.P2P;
 [JsonSerializable(typeof(PeerVoteKickPayload))]
 [JsonSerializable(typeof(PeerKeepalivePayload))]
 [JsonSerializable(typeof(PeerKeepaliveAckPayload))]
+[JsonSerializable(typeof(PeerCombatActionPayload))]
+[JsonSerializable(typeof(PeerEnemySyncPayload))]
+[JsonSerializable(typeof(PeerEnemySyncEntry))]
+[JsonSerializable(typeof(PeerEnemySyncEntry[]))]
+[JsonSerializable(typeof(PeerProjectileSyncEntry))]
+[JsonSerializable(typeof(PeerProjectileSyncEntry[]))]
+[JsonSerializable(typeof(PeerDamageEventPayload))]
 [JsonSerializable(typeof(string[]))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,

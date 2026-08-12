@@ -67,6 +67,11 @@ public sealed class PeerMessage
     // --- Keepalive ---
     public PeerKeepalivePayload? Keepalive { get; set; }
     public PeerKeepaliveAckPayload? KeepaliveAck { get; set; }
+
+    // --- Combat (Phase B — Overworld Combat Sync) ---
+    public PeerCombatActionPayload? CombatAction { get; set; }
+    public PeerEnemySyncPayload? EnemySync { get; set; }
+    public PeerDamageEventPayload? DamageEvent { get; set; }
 }
 
 /// <summary>
@@ -100,4 +105,9 @@ public static class PeerMessageTypes
     // Keepalive
     public const string Keepalive = "keepalive";
     public const string KeepaliveAck = "keepalive_ack";
+
+    // Combat Sync (Phase B — Overworld)
+    public const string CombatAction = "combat_action";
+    public const string EnemySync = "enemy_sync";
+    public const string DamageEvent = "damage_event";
 }

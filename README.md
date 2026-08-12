@@ -663,6 +663,21 @@ public sealed class GameLoop : IDisposable
 ### Entity Model
 
 All game objects share a single flat class (no inheritance):
+Provides advantages for: memory management, cache efficiency, and compiler optimization
+This in game design is called "Data-Oriented Design" or "Fat Object" pattern.  The 
+following are reasons why it works exceptionally well for Native AOT:
+1. Maximum Cache Locality (Data-Oriented Design)
+            Bottleneck occurs getting data TO the cpu.
+            Mitigation: when objects are a predictable size they can sit in a simple array.
+                     When the CPU loads one object it automatically loads the new few objs too.
+                     Loop processing through the entities becomes very fast.
+2. Perfect Devirtualization
+            Inheritance requires virtual methods and runtime table (vtable)
+            Mitigation: with flat class every single method call is direct.  AOT compiler
+                     does not have to emit any vtable lookup logic into the final machine code
+3. Aggressize Method Inlining...
+4. Zero casting overhead
+5. Aggressive Trimming (Smaller File Size)
 
 ```csharp
 public sealed class Entity

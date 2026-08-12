@@ -566,7 +566,7 @@ If Kafka is unavailable:
 
 | Endpoint | Purpose | Who Connects |
 |----------|---------|-------------|
-| `/ws` | Player client → game server (dungeon gameplay) | Browser WebSocket |
+| `/ws` | Player client → game server (dungeon gameplay) | Browser WebSocket | Brandon's note -- This will be moved to full mesh... right now it needs that centralized server
 | `/ws/peer` | Server ↔ Server (P2P mesh) | Other Carcosa.Server instances |
 
 ### Player WebSocket (`/ws`)

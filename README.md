@@ -5,6 +5,14 @@
 
 ---
 
+<img width="2067" height="1278" alt="Screenshot 2026-08-10 204840" src="https://github.com/user-attachments/assets/3e9a4162-759e-45ce-9c29-313a45640c6a" />
+
+<img width="2060" height="692" alt="Mesh_and_dashboard" src="https://github.com/user-attachments/assets/76851111-2058-4b6c-8994-6019ddcad841" />
+
+<img width="2193" height="762" alt="kafka_admin_messaging" src="https://github.com/user-attachments/assets/c3beb56e-9289-43f8-81f1-6098100de357" />
+
+
+
 ## Table of Contents
 
 1. [Executive Summary](#1-executive-summary)

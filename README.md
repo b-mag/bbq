@@ -29,7 +29,6 @@
 12. [Frontend Architecture (React/Next.js)](#12-frontend-architecture-reactnextjs)
 13. [Native AOT & JSON Serialization](#13-native-aot--json-serialization)
 14. [Build, Deploy & Run](#14-build-deploy--run)
-15. [Key Differences: .NET vs Java](#15-key-differences-net-vs-java)
 
 ---
 
@@ -825,8 +824,6 @@ public partial class PeerJsonContext : JsonSerializerContext { }
 3. Add the type constant to `PeerMessageTypes`
 4. **Register in `PeerJsonContext`** — forgetting this causes silent failures in release builds
 
-**Java analogy:** Like Jackson's `@JsonTypeInfo` + `@JsonSubTypes`, but resolved at compile time. If you forget to register a type, it simply won't serialize (no runtime error in debug, silent null in AOT release).
-
 ---
 
 ## 14. Build, Deploy & Run
@@ -874,6 +871,13 @@ cd dev_scripts
 docker-compose up -d       # Starts Kafka + matchmaking
 cd src/backend
 dotnet run -- --matchmaking-url=http://localhost:5100
+
+I typically build the release cut and run a script to run 2 peers and 1 matchmaking instance.  If you would like to do this then
+go into the dev_scripts folder and run: build_all_release.bat (it takes a few minutes... feels like forever)
+Then you can just double click the script: launch_full_test.bat and it will launch all the needed exe's - Full persistance
+ and many other features are not implemented fully but the core game and architecture is fully working.
+
+
 ```
 
 ### CLI Arguments
@@ -902,70 +906,7 @@ Players receive: the exe + wwwroot folder. Double-click to play. No installation
 
 ---
 
-## 15. Key Differences: .NET vs Java
 
-| Concept | Java | .NET (this project) |
-|---------|------|---------------------|
-| Entry point | `public static void main(String[] args)` | Top-level statements in `Program.cs` |
-| Dependency Injection | Spring `@Autowired` / `@Bean` | `builder.Services.AddSingleton<T>()` |
-| Web framework | Spring Boot / Micronaut | ASP.NET Core Minimal API |
-| WebSocket | `@ServerEndpoint` / Netty | `app.Map("/ws", ...)` + raw WebSocket |
-| JSON | Jackson ObjectMapper | `System.Text.Json` (source-generated) |
-| Async/Await | `CompletableFuture` | `async/await` (built into language) |
-| Collections | `ConcurrentHashMap` | `ConcurrentDictionary` |
-| Properties | Getters/Setters (lombok) | `{ get; set; }` (built into language) |
-| Records | Java 16+ `record` | C# `record` (similar) |
-| Null safety | `@Nullable` annotations | `?` suffix (e.g., `string?`) |
-| Build tool | Maven/Gradle | MSBuild (`.csproj` XML) |
-| Package manager | Maven Central | NuGet |
-| Native compile | GraalVM Native Image | .NET Native AOT |
-| Test | JUnit 5 + Mockito | xUnit + Moq |
-| Lambda/LINQ | Streams API | LINQ (`Where`, `Select`, `ToList`) |
-| Interface keyword | `interface` | `interface` (same) |
-| Sealed classes | `sealed` (Java 17+) | `sealed` (similar) |
-
-### Code Pattern Comparison
-
-**Dependency Registration:**
-```java
-// Spring Boot
-@Configuration
-public class AppConfig {
-    @Bean
-    public PeerMesh peerMesh(PeerIdentity identity) {
-        return new PeerMesh(identity);
-    }
-}
-```
-```csharp
-// ASP.NET Core (this project)
-builder.Services.AddSingleton(sp => new PeerMesh(
-    sp.GetRequiredService<PeerIdentity>()));
-```
-
-**Async WebSocket handling:**
-```java
-// Java (Netty-style)
-CompletableFuture<Void> result = channel.writeAndFlush(message);
-result.thenAccept(v -> log.info("sent"));
-```
-```csharp
-// .NET (this project)
-await webSocket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
-```
-
-**REST endpoint:**
-```java
-// Spring Boot
-@GetMapping("/api/health")
-public HealthResponse health() {
-    return new HealthResponse("Carcosa", "1.0.0", Instant.now());
-}
-```
-```csharp
-// ASP.NET Core Minimal API (this project)
-app.MapGet("/api/health", () => new HealthResponse("Carcosa", "1.0.0", DateTime.UtcNow));
-```
 ## License
 
-I plan to create a full commercial game so feel free to get inspired by it.
+I plan to create a full commercial game so feel free to get inspired by it.  I think the idea to have an online game but utilize a peer 2 peer mesh network seems pretty novel and I wont need to worry about hosting a a server! :)

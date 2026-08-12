@@ -1,7 +1,5 @@
 # CARCOSA — Technical Architecture Documentation
 
-## Knowledge Transfer Guide for New Developers
-
 **Version:** 1.0  
 **Last Updated:** August 2026  
 

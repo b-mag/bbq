@@ -206,8 +206,6 @@ app.MapFallback(async context =>
 });
 ```
 
-**Java analogy:** This is like embedding a React build into `src/main/resources/static/` in a Spring Boot jar, then serving it via `ResourceHandler`. The difference is .NET compiles to native code, so there's no JVM — the exe IS the server.
-
 ### Frontend-Backend Communication Model
 
 The frontend communicates with its LOCAL backend (same machine, same process) via HTTP:
@@ -554,7 +552,6 @@ If Kafka is unavailable:
 3. Game servers fall back to `POST /api/sessions/heartbeat` (direct REST to matchmaking)
 4. The system works identically — Kafka is an optimization, not a requirement
 
-**Java analogy:** This is identical to using `kafka-clients` with `KafkaProducer<String, String>` and `KafkaConsumer<String, String>`. The Confluent .NET library mirrors the Java API closely.
 
 ---
 
@@ -625,8 +622,6 @@ public sealed class PeerMessage
 }
 ```
 
-**Java analogy:** This is like having a base `Message` class with a `type` field and nullable `@JsonInclude(NON_NULL)` payload fields. In Java you might use a `sealed interface` with Jackson subtypes; in .NET the flat approach avoids polymorphic serialization issues under AOT.
-
 ---
 
 ## 11. The Game Loop & Combat System
@@ -683,7 +678,7 @@ public sealed class Entity
     public float Stamina { get; set; }
     public int ShieldHP { get; set; }
     public bool HasIFrames { get; set; }
-    public string? TaggedBy { get; set; }   // RuneScape loot rights
+    public string? TaggedBy { get; set; }   // RuneScape style loot rights
 
     // State tracking
     public bool IsDirty { get; set; }       // Delta sync optimization

@@ -3,32 +3,33 @@
  * OverworldView.tsx — Main Overworld UI Component
  * =============================================================================
  *
- * The primary view when a player is connected to the overworld server.
- * Shows the overworld canvas with players, a minimap indicator, party info,
- * and dungeon entrance prompts.
+ * The primary view when a player is connected to the overworld.
+ * Party, dungeon enter, and altar use REST (mesh RPG) rather than /ws/overworld.
  * =============================================================================
  */
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useOverworldSocket } from '@/hooks/useOverworldSocket';
 import { useOverworldInput } from '@/hooks/useOverworldInput';
-import { OverworldMessage, OwMessageTypes, OwPlayerState, OwDungeonEntranceData, OwWorldObjectData, OwLandmarkData, OwPartyUpdatePayload } from '@/lib/overworld-messages';
+import { OwDungeonEntranceData, OwWorldObjectData, OwLandmarkData } from '@/lib/overworld-messages';
 import { OverworldGameMap, decodeOverworldMap } from '@/lib/overworld-map';
 import OverworldCanvas from './OverworldCanvas';
 import OverworldChat from './OverworldChat';
 import P2POverlay from './P2POverlay';
 import HealthBar from './HealthBar';
 import StaminaBar from './StaminaBar';
+import XpBar from './XpBar';
 import AbilityBar from './AbilityBar';
-import QuitMenu from './QuitMenu';
+import PauseMenu from './PauseMenu';
+import SettingsPanel, { GameSettings } from './SettingsPanel';
 import InventoryPanel from './InventoryPanel';
 import AbilitySelectPanel from './AbilitySelectPanel';
+import FlameOfferingPanel from './FlameOfferingPanel';
 import SaveIndicator from './SaveIndicator';
 import { useP2POverworld } from '@/hooks/useP2POverworld';
 import { usePlayerStats } from '@/hooks/usePlayerStats';
 import { useOverworldEnemies } from '@/hooks/useOverworldEnemies';
-import { handleEscape, pushPanel, removePanel, isOpen } from '@/lib/ui-stack';
+import { pushPanel, removePanel } from '@/lib/ui-stack';
 
 interface OverworldViewProps {
   playerName: string;
@@ -36,75 +37,162 @@ interface OverworldViewProps {
   onEnterDungeon?: (data: { hostAddress: string; seed: number; scenario: string }) => void;
 }
 
+interface PartySnapshot {
+  partyId: string | null;
+  leaderPeerId: string | null;
+  memberPeerIds: string[];
+  pendingInvitePeerIds: string[];
+}
+
+function isAltarObject(obj: OwWorldObjectData): boolean {
+  const t = (obj.type || '').toLowerCase();
+  return t.includes('altar') || t.includes('flame') || t === 'meditation_altar';
+}
+
+function isAltarLandmark(lm: OwLandmarkData): boolean {
+  const t = (lm.type || '').toLowerCase();
+  const n = (lm.name || '').toLowerCase();
+  return t.includes('altar') || n.includes('altar') || n.includes('meditation');
+}
+
 export default function OverworldView({ playerName, onDisconnect, onEnterDungeon }: OverworldViewProps) {
   const [map, setMap] = useState<OverworldGameMap | null>(null);
-  const [players, setPlayers] = useState<OwPlayerState[]>([]);
   const [dungeonEntrances, setDungeonEntrances] = useState<OwDungeonEntranceData[]>([]);
   const [worldObjects, setWorldObjects] = useState<OwWorldObjectData[]>([]);
   const [landmarks, setLandmarks] = useState<OwLandmarkData[]>([]);
-  const [party, setParty] = useState<OwPartyUpdatePayload | null>(null);
+  const [party, setParty] = useState<PartySnapshot | null>(null);
   const [nearbyEntrance, setNearbyEntrance] = useState<OwDungeonEntranceData | null>(null);
-  const [pendingInvite, setPendingInvite] = useState<{ partyId: string; inviterName: string } | null>(null);
+  const [nearbyAltar, setNearbyAltar] = useState(false);
+  const [pendingInvite, setPendingInvite] = useState<{ fromPeerId: string; inviterName: string } | null>(null);
   const [chatFocused, setChatFocused] = useState(false);
+  const [clientSettings, setClientSettings] = useState({ showGlyphOverlay: true, showFps: false });
 
-  // UI panel state (managed by ui-stack for ESC dismissal)
-  const [showQuitMenu, setShowQuitMenu] = useState(false);
+  const [showPauseMenu, setShowPauseMenu] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showInventory, setShowInventory] = useState(false);
   const [showAbilitySelect, setShowAbilitySelect] = useState(false);
+  const [showFlameOffering, setShowFlameOffering] = useState(false);
 
-  const playersRef = useRef<Map<string, OwPlayerState>>(new Map());
-
-  // P2P mesh state (from local game server)
   const p2p = useP2POverworld();
-
-  // Player combat stats (HP, stamina, abilities, cooldowns)
   const stats = usePlayerStats();
-
-  // Enemy and projectile state for rendering
   const { enemies, projectiles, lootDrops } = useOverworldEnemies();
 
-  // Global keydown handler for ESC (layered dismiss) and I (inventory)
+  const enteringDungeonRef = useRef(false);
+  const lastDungeonInstanceRef = useRef<string | null>(
+    typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('carcosa.lastDungeonInstance') : null
+  );
+  const playersRef = useRef(p2p.players);
+  playersRef.current = p2p.players;
+  const declinedInvitesRef = useRef<Set<string>>(new Set());
+  const anyPanelOpen = showPauseMenu || showSettings || showInventory || showAbilitySelect || showFlameOffering;
+
+  const input = useOverworldInput({
+    send: () => {},
+    map,
+    active: map !== null && !chatFocused && !anyPanelOpen,
+    worldObjects,
+  });
+
+  const localId = p2p.status?.peerId ?? null;
+
+  const openFlame = useCallback(() => {
+    if (showFlameOffering) return;
+    setShowFlameOffering(true);
+    pushPanel('flame-offering');
+  }, [showFlameOffering]);
+
+  const transitionToDungeon = useCallback((seed: number, scenario: string, instanceId?: string | null) => {
+    if (!onEnterDungeon) return;
+    const id = instanceId || `${seed}:${scenario}`;
+    lastDungeonInstanceRef.current = id;
+    try { sessionStorage.setItem('carcosa.lastDungeonInstance', id); } catch { /* ignore */ }
+    onEnterDungeon({
+      hostAddress: window.location.origin,
+      seed,
+      scenario: scenario || 'mountain_cave',
+    });
+  }, [onEnterDungeon]);
+
+  const enterDungeon = useCallback(async (entrance?: OwDungeonEntranceData | null) => {
+    if (!onEnterDungeon || enteringDungeonRef.current) return;
+    enteringDungeonRef.current = true;
+    try {
+      const res = await fetch('/api/gameplay/dungeon/enter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scenario: 'mountain_cave',
+          entranceX: entrance?.x ?? input.position.x,
+          entranceY: entrance?.y ?? input.position.y,
+        }),
+      });
+      if (!res.ok) {
+        enteringDungeonRef.current = false;
+        return;
+      }
+      const data = await res.json();
+      const instance = data.instance;
+      if (data.started || instance?.active) {
+        transitionToDungeon(
+          instance?.seed ?? 0,
+          instance?.scenario || 'mountain_cave',
+          instance?.instanceId
+        );
+      } else {
+        enteringDungeonRef.current = false;
+      }
+    } catch {
+      enteringDungeonRef.current = false;
+    }
+  }, [onEnterDungeon, input.position.x, input.position.y, transitionToDungeon]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (chatFocused) return; // Don't intercept keys while typing in chat
+      if (chatFocused) return;
+      if (e.repeat) return;
 
       if (e.key === 'Escape') {
         e.preventDefault();
-        if (showInventory) { setShowInventory(false); removePanel('inventory'); }
+        if (showSettings) { setShowSettings(false); removePanel('settings'); }
+        else if (showFlameOffering) { setShowFlameOffering(false); removePanel('flame-offering'); }
+        else if (showInventory) { setShowInventory(false); removePanel('inventory'); }
         else if (showAbilitySelect) { setShowAbilitySelect(false); removePanel('ability-select'); }
-        else if (showQuitMenu) { setShowQuitMenu(false); removePanel('quit-menu'); }
-        else { setShowQuitMenu(true); pushPanel('quit-menu'); }
+        else if (showPauseMenu) { setShowPauseMenu(false); removePanel('pause-menu'); }
+        else { setShowPauseMenu(true); pushPanel('pause-menu'); }
+        return;
       }
 
+      if (anyPanelOpen) return;
+
       if (e.key === 'i' || e.key === 'I') {
-        if (!showInventory && !showAbilitySelect && !showQuitMenu) {
-          setShowInventory(true);
-          pushPanel('inventory');
-        } else if (showInventory) {
-          setShowInventory(false);
-          removePanel('inventory');
+        setShowInventory(true);
+        pushPanel('inventory');
+      }
+
+      if (e.key === 'f' || e.key === 'F') {
+        openFlame();
+      }
+
+      if (e.key === 'e' || e.key === 'E') {
+        if (nearbyEntrance) {
+          enterDungeon(nearbyEntrance);
+        } else if (nearbyAltar) {
+          openFlame();
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [chatFocused, showInventory, showAbilitySelect, showQuitMenu]);
+  }, [
+    chatFocused, anyPanelOpen, showSettings, showFlameOffering, showInventory,
+    showAbilitySelect, showPauseMenu, nearbyEntrance, nearbyAltar, enterDungeon, openFlame,
+  ]);
 
-  const ws = useOverworldSocket({ playerName });
-
-  const input = useOverworldInput({
-    send: ws.send,
-    map,
-    active: (ws.status === 'connected' || map !== null) && !chatFocused,
-    worldObjects,
-  });
-
-  // Load overworld map from local server REST API (P2P mode)
+  // Load overworld map from local server REST API
   useEffect(() => {
-    if (map) return; // Already loaded
+    if (map) return;
 
-    // Set player name on local server so it gets broadcast to peers
     fetch('/api/p2p/name', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -122,7 +210,6 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
             setDungeonEntrances(data.dungeonEntrances || []);
             setWorldObjects(data.worldObjects || []);
             setLandmarks(data.landmarks || []);
-            // Set spawn position
             const spawnX = data.spawnPoint?.x ? data.spawnPoint.x + 0.5 : 100.5;
             const spawnY = data.spawnPoint?.y ? data.spawnPoint.y + 0.5 : 180.5;
             input.setInitialPosition(spawnX, spawnY);
@@ -131,113 +218,26 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         }
       } catch (e) {
         console.warn('[Overworld] Failed to load map from /api/p2p/map, will retry...', e);
-        // Retry in 2 seconds
         setTimeout(loadMap, 2000);
       }
     };
     loadMap();
   }, [map]);
 
-  // Handle incoming messages
   useEffect(() => {
-    const unsub = ws.onMessage((message: OverworldMessage) => {
-      switch (message.type) {
-        case OwMessageTypes.MapData:
-          if (message.mapData) {
-            const decoded = decodeOverworldMap(message.mapData);
-            setMap(decoded);
-            setDungeonEntrances(message.mapData.dungeonEntrances);
-            setWorldObjects(message.mapData.worldObjects);
-            setLandmarks(message.mapData.landmarks);
-            input.setInitialPosition(message.mapData.spawnX, message.mapData.spawnY);
-          }
-          break;
-
-        case OwMessageTypes.PlayerJoined:
-          if (message.playerJoined) {
-            const p = message.playerJoined;
-            playersRef.current.set(p.playerId, {
-              id: p.playerId,
-              name: p.playerName,
-              x: p.x,
-              y: p.y,
-              velocityX: 0,
-              velocityY: 0,
-              status: 'exploring',
-              isPartyLeader: false,
-            });
-            setPlayers(Array.from(playersRef.current.values()));
-          }
-          break;
-
-        case OwMessageTypes.PlayerLeft:
-          if (message.playerLeft) {
-            playersRef.current.delete(message.playerLeft.playerId);
-            setPlayers(Array.from(playersRef.current.values()));
-          }
-          break;
-
-        case OwMessageTypes.WorldState:
-          if (message.worldState) {
-            // Update other player positions (not local player — we use prediction for that)
-            for (const ps of message.worldState.players) {
-              if (ps.id !== ws.playerId) {
-                playersRef.current.set(ps.id, ps);
-              }
-            }
-            setPlayers(Array.from(playersRef.current.values()));
-
-            // Reconcile local player prediction only when server confirms our inputs
-            if (message.worldState.lastProcessedInput != null && ws.playerId) {
-              const localState = message.worldState.players.find(p => p.id === ws.playerId);
-              if (localState) {
-                input.reconcile(localState.x, localState.y, message.worldState.lastProcessedInput);
-              }
-            }
-          }
-          break;
-
-        case OwMessageTypes.PartyInvite:
-          if (message.partyInvite) {
-            setPendingInvite({
-              partyId: message.partyInvite.partyId,
-              inviterName: message.partyInvite.inviterName,
-            });
-            // Auto-dismiss after 15s
-            setTimeout(() => setPendingInvite(null), 15000);
-          }
-          break;
-
-        case OwMessageTypes.PartyUpdate:
-          if (message.partyUpdate) {
-            setParty(message.partyUpdate);
-            if (message.partyUpdate.event === 'disbanded') {
-              setParty(null);
-            }
-          }
-          break;
-
-        case OwMessageTypes.DungeonConnect:
-          if (message.dungeonConnect && onEnterDungeon) {
-            onEnterDungeon({
-              hostAddress: message.dungeonConnect.hostAddress,
-              seed: message.dungeonConnect.seed,
-              scenario: message.dungeonConnect.scenario,
-            });
-          }
-          break;
-      }
-    });
-    return unsub;
-  }, [ws, input, onEnterDungeon]);
-
-  // Auto-connect on mount
-  useEffect(() => {
-    ws.connect();
-    return () => ws.disconnect();
+    fetch('/api/gameplay/settings')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        setClientSettings({
+          showGlyphOverlay: d.showGlyphOverlay !== false,
+          showFps: !!d.showFps,
+        });
+      })
+      .catch(() => {});
   }, []);
 
-  // Check if near a dungeon entrance
+  // Nearby dungeon entrance / altar
   useEffect(() => {
     const pos = input.position;
     const nearby = dungeonEntrances.find(e => {
@@ -245,9 +245,18 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
       return dist < 2.5;
     });
     setNearbyEntrance(nearby || null);
-  }, [input.position, dungeonEntrances]);
 
-  // Sync local player position to P2P mesh (via local server)
+    const altarObj = worldObjects.some(o => {
+      if (!isAltarObject(o)) return false;
+      return Math.sqrt((o.x - pos.x) ** 2 + (o.y - pos.y) ** 2) < 2.5;
+    });
+    const altarLm = landmarks.some(lm => {
+      if (!isAltarLandmark(lm)) return false;
+      return Math.sqrt((lm.x - pos.x) ** 2 + (lm.y - pos.y) ** 2) < 2.5;
+    });
+    setNearbyAltar(altarObj || altarLm);
+  }, [input.position, dungeonEntrances, worldObjects, landmarks]);
+
   useEffect(() => {
     const pos = input.position;
     if (pos.x !== 0 || pos.y !== 0) {
@@ -255,10 +264,8 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
     }
   }, [input.position, p2p]);
 
-  // Set initial position from P2P data if we haven't received map spawn yet
   useEffect(() => {
     if (input.position.x === 0 && input.position.y === 0 && p2p.status) {
-      // Find our own player in the P2P player list
       const localP2P = p2p.players.find(p => p.id === p2p.status?.peerId);
       if (localP2P && (localP2P.x !== 0 || localP2P.y !== 0)) {
         input.setInitialPosition(localP2P.x, localP2P.y);
@@ -266,41 +273,96 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
     }
   }, [p2p.players, p2p.status, input]);
 
-  // Merge: use P2P players for remote peers, local prediction for our player
-  // p2p.players includes our local player from the server — override with predicted position
-  const localId = p2p.status?.peerId ?? ws.playerId;
-  const displayPlayers = (p2p.players.length > 0 ? p2p.players : players).map(p => {
+  // Party REST poll
+  useEffect(() => {
+    const pollParty = async () => {
+      try {
+        const res = await fetch('/api/p2p/party');
+        if (!res.ok) return;
+        const data: PartySnapshot = await res.json();
+        if (data.partyId && data.memberPeerIds?.length) {
+          setParty(data);
+        } else {
+          setParty(null);
+        }
+        if (localId && data.pendingInvitePeerIds?.includes(localId)) {
+          const fromId = data.leaderPeerId || localId;
+          if (!declinedInvitesRef.current.has(fromId)) {
+            const inviter = playersRef.current.find(p => p.id === fromId);
+            setPendingInvite({
+              fromPeerId: fromId,
+              inviterName: inviter?.name || 'A traveler',
+            });
+          }
+        } else {
+          setPendingInvite(null);
+        }
+      } catch { /* ignore */ }
+    };
+    pollParty();
+    const interval = setInterval(pollParty, 1500);
+    return () => clearInterval(interval);
+  }, [localId]);
+
+  // Dungeon instance poll — party members get pulled in when a dungeon is active
+  useEffect(() => {
+    if (!onEnterDungeon) return;
+    const pollDungeon = async () => {
+      if (enteringDungeonRef.current) return;
+      try {
+        const res = await fetch('/api/gameplay/dungeon');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.active) {
+          const id = data.instanceId || `${data.seed}:${data.scenario}`;
+          if (id === lastDungeonInstanceRef.current) return;
+          enteringDungeonRef.current = true;
+          transitionToDungeon(data.seed ?? 0, data.scenario || 'mountain_cave', data.instanceId);
+        }
+      } catch { /* ignore */ }
+    };
+    const interval = setInterval(pollDungeon, 1500);
+    return () => clearInterval(interval);
+  }, [onEnterDungeon, transitionToDungeon]);
+
+  const displayPlayers = p2p.players.map(p => {
     if (localId && p.id === localId) {
       return { ...p, x: input.position.x, y: input.position.y };
     }
     return p;
   });
 
-  const handleInvitePlayer = useCallback((targetId: string) => {
-    // Send the target player's ID in the inviterId field (server expects it there)
-    ws.send({
-      type: OwMessageTypes.PartyInvite,
-      partyInvite: { partyId: '', inviterId: targetId, inviterName: playerName },
-    });
-  }, [ws, playerName]);
+  const handleInvitePlayer = useCallback(async (targetId: string) => {
+    if (!targetId || targetId === localId) return;
+    try {
+      await fetch('/api/p2p/party/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetPeerId: targetId }),
+      });
+    } catch { /* ignore */ }
+  }, [localId]);
 
-  const handleAcceptInvite = useCallback(() => {
+  const handleAcceptInvite = useCallback(async () => {
     if (!pendingInvite) return;
-    ws.send({
-      type: OwMessageTypes.PartyResponse,
-      partyResponse: { partyId: pendingInvite.partyId, accepted: true },
-    });
+    try {
+      await fetch('/api/p2p/party/accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromPeerId: pendingInvite.fromPeerId }),
+      });
+    } catch { /* ignore */ }
     setPendingInvite(null);
-  }, [ws, pendingInvite]);
+  }, [pendingInvite]);
 
   const handleDeclineInvite = useCallback(() => {
-    if (!pendingInvite) return;
-    ws.send({
-      type: OwMessageTypes.PartyResponse,
-      partyResponse: { partyId: pendingInvite.partyId, accepted: false },
-    });
+    if (pendingInvite) declinedInvitesRef.current.add(pendingInvite.fromPeerId);
     setPendingInvite(null);
-  }, [ws, pendingInvite]);
+  }, [pendingInvite]);
+
+  const handleSettingsSaved = useCallback((s: GameSettings) => {
+    setClientSettings({ showGlyphOverlay: s.showGlyphOverlay, showFps: s.showFps });
+  }, []);
 
   if (!map) {
     return (
@@ -316,13 +378,21 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
     );
   }
 
+  const partyMembers = (party?.memberPeerIds || []).map(id => {
+    const p = p2p.players.find(pl => pl.id === id);
+    return {
+      id,
+      name: p?.name || (id === localId ? playerName : id.slice(0, 8)),
+      isLeader: id === party?.leaderPeerId,
+    };
+  });
+
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden', background: '#0d0f07' }}>
-      {/* Main canvas */}
       <OverworldCanvas
         map={map}
         players={displayPlayers}
-        localPlayerId={p2p.status?.peerId ?? ws.playerId}
+        localPlayerId={localId}
         dungeonEntrances={dungeonEntrances}
         worldObjects={worldObjects}
         landmarks={landmarks}
@@ -334,10 +404,8 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         onPlayerClick={handleInvitePlayer}
       />
 
-      {/* HP Bar (top-left) */}
       <HealthBar hp={stats.hp} maxHp={stats.maxHp} level={stats.level} />
 
-      {/* Stamina Bar (below HP) */}
       <StaminaBar
         stamina={stats.stamina}
         maxStamina={stats.maxStamina}
@@ -345,7 +413,8 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         shieldHp={stats.shieldHp}
       />
 
-      {/* Ability Bar (bottom-center) */}
+      <XpBar xp={stats.xp} xpForNextLevel={stats.xpForNextLevel} />
+
       <AbilityBar
         primaryAbility={stats.primaryAbility}
         secondaryAbility={stats.secondaryAbility}
@@ -355,27 +424,27 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         isDepleted={stats.isStaminaDepleted}
       />
 
-      {/* Auto-save indicator (top-center, appears briefly every 60s) */}
       <SaveIndicator />
 
-      {/* Party panel (top-right) */}
-      {party && (
+      {clientSettings.showFps && <FpsMeter />}
+
+      {party && partyMembers.length > 0 && (
         <div style={{
           position: 'absolute', top: 12, right: 12, padding: '8px 12px',
           background: 'rgba(13, 15, 7, 0.85)', border: '1px solid #2a4a2a',
           borderRadius: 4, color: '#e8dcc8', fontSize: '0.75rem', minWidth: 140,
+          zIndex: 20,
         }}>
           <div style={{ color: '#4a8c3f', fontWeight: 'bold', marginBottom: 4 }}>Party</div>
-          {party.members.map(m => (
+          {partyMembers.map(m => (
             <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
               {m.isLeader && <span style={{ color: '#ffd700' }}>★</span>}
-              <span style={{ color: m.id === ws.playerId ? '#c9a84c' : '#9a9080' }}>{m.name}</span>
+              <span style={{ color: m.id === localId ? '#c9a84c' : '#9a9080' }}>{m.name}</span>
             </div>
           ))}
         </div>
       )}
 
-      {/* Dungeon entrance prompt */}
       {nearbyEntrance && (
         <div style={{
           position: 'absolute', bottom: 80, left: '50%', transform: 'translateX(-50%)',
@@ -388,7 +457,18 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         </div>
       )}
 
-      {/* Party invite popup */}
+      {!nearbyEntrance && nearbyAltar && (
+        <div style={{
+          position: 'absolute', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+          padding: '10px 20px', background: 'rgba(40, 20, 10, 0.9)',
+          border: '1px solid #c08050', borderRadius: 6, color: '#e8dcc8',
+          textAlign: 'center', fontSize: '0.85rem',
+        }}>
+          <div style={{ color: '#c08050', fontWeight: 'bold' }}>Meditation Altar</div>
+          <div style={{ color: '#9a8b74', marginTop: 4 }}>Press <strong>E</strong> to offer to the Flame</div>
+        </div>
+      )}
+
       {pendingInvite && (
         <div style={{
           position: 'absolute', top: '30%', left: '50%', transform: 'translate(-50%, -50%)',
@@ -412,44 +492,50 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         </div>
       )}
 
-      {/* Chat */}
       <OverworldChat
         onFocusChange={(focused) => setChatFocused(focused)}
       />
 
-      {/* Bottom-left: Controls hint */}
       <div style={{
         position: 'absolute', bottom: 12, left: 12, padding: '6px 10px',
         background: 'rgba(13, 15, 7, 0.7)', borderRadius: 4,
         color: '#6a5d4a', fontSize: '0.65rem',
       }}>
-        WASD: Move | LMB: Attack | RMB: Secondary | E: Interact | Scroll: Zoom | Enter: Chat
+        WASD: Move | LMB: Attack | RMB: Secondary | E: Interact | F: Flame | I: Inventory | ESC: Pause | Enter: Chat
       </div>
 
-      {/* P2P Mesh overlay (shard info, Glyph, peer count) */}
       <P2POverlay
         status={p2p.status}
         shard={p2p.shard}
         glyph={p2p.glyph}
         onGlyphConnect={p2p.connectViaGlyph}
+        showGlyphOverlay={clientSettings.showGlyphOverlay}
       />
 
-      {/* Quit Menu (ESC when nothing open) */}
-      {showQuitMenu && (
-        <QuitMenu
-          onConfirm={onDisconnect}
-          onCancel={() => { setShowQuitMenu(false); removePanel('quit-menu'); }}
+      {showPauseMenu && (
+        <PauseMenu
+          onResume={() => { setShowPauseMenu(false); removePanel('pause-menu'); }}
+          onSettings={() => { setShowSettings(true); pushPanel('settings'); }}
+          onQuit={onDisconnect}
         />
       )}
 
-      {/* Inventory Panel (I key) */}
+      {showSettings && (
+        <SettingsPanel
+          onClose={() => { setShowSettings(false); removePanel('settings'); }}
+          onSaved={handleSettingsSaved}
+        />
+      )}
+
       {showInventory && (
         <InventoryPanel
           onClose={() => { setShowInventory(false); removePanel('inventory'); }}
+          loadoutLocked={stats.loadoutLocked}
+          primaryAbility={stats.primaryAbility}
+          secondaryAbility={stats.secondaryAbility}
         />
       )}
 
-      {/* Ability Select Panel (Meditation Altar interaction) */}
       {showAbilitySelect && (
         <AbilitySelectPanel
           currentPrimary={stats.primaryAbility}
@@ -466,6 +552,45 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
           onClose={() => { setShowAbilitySelect(false); removePanel('ability-select'); }}
         />
       )}
+
+      {showFlameOffering && (
+        <FlameOfferingPanel
+          onClose={() => { setShowFlameOffering(false); removePanel('flame-offering'); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function FpsMeter() {
+  const [fps, setFps] = useState(0);
+
+  useEffect(() => {
+    let frames = 0;
+    let last = performance.now();
+    let raf = 0;
+    const loop = (now: number) => {
+      frames++;
+      if (now - last >= 1000) {
+        setFps(frames);
+        frames = 0;
+        last = now;
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return (
+    <div style={{
+      position: 'absolute', top: 12, left: 210,
+      padding: '2px 6px',
+      background: 'rgba(13, 15, 7, 0.7)',
+      borderRadius: 3,
+      color: '#6a5d4a', fontSize: '0.65rem', fontFamily: 'monospace',
+    }}>
+      {fps} FPS
     </div>
   );
 }

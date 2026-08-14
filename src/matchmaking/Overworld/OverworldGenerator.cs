@@ -21,6 +21,7 @@ namespace Carcosa.Matchmaking.Overworld;
 
 public static class OverworldGenerator
 {
+    // Greybox core remains 200×200; LTTP-scale expansion tracked in OVERWORLD_VISION.md
     public const int DefaultWidth = 200;
     public const int DefaultHeight = 200;
 
@@ -548,6 +549,8 @@ public static class OverworldGenerator
             new() { Name = "The Pallid Shore", X = 55, Y = 75, Type = "shore" },
             new() { Name = "Aldebaran Crossing", X = 100, Y = 110, Type = "crossroads" },
             new() { Name = "The Hyades Gate", X = 50, Y = 50, Type = "gate" },
+            new() { Name = "Court of the Dragon", X = 40, Y = 50, Type = "ash" },
+            new() { Name = "Dim Carcosa Approaches", X = 80, Y = 40, Type = "canyon" },
         };
     }
 
@@ -578,7 +581,7 @@ public static class OverworldGenerator
                 Name = "Mountain Cave",
                 X = 130,
                 Y = 28,
-                Scenario = "warehouse",
+                Scenario = "mountain_cave",
                 DungeonWidth = 60,
                 DungeonHeight = 50
             },

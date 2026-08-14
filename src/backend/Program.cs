@@ -130,6 +130,7 @@ Console.WriteLine($"[P2P] Peer ID: {peerIdentity.PeerId}, Protocol: {PeerProtoco
     $"Game: {PeerProtocol.GameVersionString}");
 builder.Services.AddSingleton(peerIdentity);
 builder.Services.AddSingleton(new PeerMesh(peerIdentity));
+builder.Services.AddSingleton(sp => new SaveManager(peerIdentity.PeerId, port));
 builder.Services.AddSingleton(sp => new OverworldSync(
     sp.GetRequiredService<PeerMesh>(),
     sp.GetRequiredService<PeerIdentity>()));
@@ -154,7 +155,12 @@ builder.Services.AddSingleton(sp => new OverworldCombatSync(
     sp.GetRequiredService<OverworldSync>(),
     sp.GetRequiredService<LootDropManager>(),
     sp.GetRequiredService<PlayerInventory>(),
-    sp.GetRequiredService<MetricsCollector>()));
+    sp.GetRequiredService<MetricsCollector>(),
+    sp.GetRequiredService<SaveManager>()));
+builder.Services.AddSingleton(sp => new MeshPartyManager(
+    sp.GetRequiredService<PeerMesh>(),
+    sp.GetRequiredService<PeerIdentity>(),
+    sp.GetRequiredService<OverworldSync>()));
 builder.Services.AddSingleton(sp => new PeerExchange(
     sp.GetRequiredService<PeerMesh>(),
     sp.GetRequiredService<PeerIdentity>(),
@@ -182,6 +188,12 @@ builder.Services.AddSingleton<SessionManager>(sp =>
     var cs = sp.GetRequiredService<CryptolStore>();
     return new SessionManager(cm, gl, cs);
 });
+builder.Services.AddSingleton(sp => new DungeonInstanceManager(
+    sp.GetRequiredService<PeerMesh>(),
+    sp.GetRequiredService<PeerIdentity>(),
+    sp.GetRequiredService<OverworldCombatSync>(),
+    sp.GetRequiredService<MeshPartyManager>(),
+    sp.GetRequiredService<MetricsCollector>()));
 
 builder.WebHost.ConfigureKestrel(options =>
 {
@@ -208,6 +220,8 @@ if (dungeonSeed.HasValue && dungeonScenario != null)
     sessionManager.SelectedScenario = dungeonScenario switch
     {
         "temple" => MapScenario.PallidSanctum,
+        "mountain_cave" or "cave" => MapScenario.MountainCave,
+        "hollow" => MapScenario.Hollow,
         _ => MapScenario.DrownedDock,
     };
 
@@ -217,6 +231,7 @@ if (dungeonSeed.HasValue && dungeonScenario != null)
     gameLoop.State.Map = sessionManager.SelectedScenario switch
     {
         MapScenario.PallidSanctum => MapGenerator.GenerateTemple(100, 100, mapSeed),
+        MapScenario.MountainCave => MapGenerator.GenerateCave(60, 50, mapSeed),
         _ => MapGenerator.Generate(80, 60, mapSeed),
     };
     Console.WriteLine($"[Dungeon Instance] Map generated: {gameLoop.State.Map.Width}x{gameLoop.State.Map.Height}");
@@ -247,25 +262,35 @@ var overworldSync = app.Services.GetRequiredService<OverworldSync>();
 var peerValidator = app.Services.GetRequiredService<PeerValidator>();
 overworldSync.SetValidator(peerValidator);
 
-// Initialize local player at the overworld spawn point (100.5, 180.5 — fishing village)
-// These coordinates match the OverworldGenerator's SpawnPoint { X=100, Y=180 }
-overworldSync.UpdateLocalPosition(100.5f, 180.5f, 0, 0);
+// Load save identity; combat sync applies progression in its constructor
+var saveManager = app.Services.GetRequiredService<SaveManager>();
+var savedProgress = saveManager.CurrentData;
+if (!string.IsNullOrWhiteSpace(savedProgress.DisplayName))
+    peerIdentity.DisplayName = savedProgress.DisplayName;
 
 // Ensure WorldId and PublicAddress are set before tracker registration
 var worldShard = app.Services.GetRequiredService<WorldShard>();
 var natTraversalService = app.Services.GetRequiredService<NatTraversalService>();
 peerIdentity.PublicAddress = await natTraversalService.DiscoverAndApplyAsync(peerIdentity, port);
 
-Console.WriteLine($"[P2P:Init] Local player initialized at spawn point (100.5, 180.5)");
-Console.WriteLine($"[P2P:Init] Peer ID: {peerIdentity.PeerId}");
-Console.WriteLine($"[P2P:Init] World: {peerIdentity.WorldId}");
-Console.WriteLine($"[P2P:Init] Public Address: {peerIdentity.PublicAddress}");
-
 overworldSync.Start();
 
 // Start the overworld combat sync (enemy AI, projectile processing, P2P combat)
 var combatSync = app.Services.GetRequiredService<OverworldCombatSync>();
+var partyManager = app.Services.GetRequiredService<MeshPartyManager>();
+combatSync.SetPartyManager(partyManager);
 combatSync.Start();
+
+Console.WriteLine($"[P2P:Init] Local player '{peerIdentity.DisplayName}' Lv{combatSync.LocalPlayer.Level} at ({combatSync.LocalPlayer.X:F1}, {combatSync.LocalPlayer.Y:F1})");
+Console.WriteLine($"[P2P:Init] Peer ID: {peerIdentity.PeerId}");
+Console.WriteLine($"[P2P:Init] World: {peerIdentity.WorldId}");
+Console.WriteLine($"[P2P:Init] Public Address: {peerIdentity.PublicAddress}");
+
+// Auto-save every 60s from live combat state
+saveManager.StartAutoSave(() => combatSync.BuildSaveData());
+
+// Subscribe dungeon manager to mesh messages (singleton ctor hooks OnPeerMessage)
+_ = app.Services.GetRequiredService<DungeonInstanceManager>();
 
 // Start Peer Exchange (periodic sharing of known peer lists for mesh discovery)
 var peerExchange = app.Services.GetRequiredService<PeerExchange>();
@@ -278,13 +303,20 @@ _ = Task.Run(async () =>
     await peerExchange.ConnectFromCacheAsync();
 });
 
-// Start tracker client (optional peer discovery via matchmaking service)
+// Start tracker client (optional peer discovery via matchmaking service) unless offline mode
 var trackerClient = app.Services.GetRequiredService<TrackerClient>();
 trackerClient.OnAdminMessage += (admin) =>
 {
     overworldSync.AddAdminMessage(admin.MessageId, admin.Message, admin.Priority, admin.DurationSeconds, admin.Timestamp);
 };
-trackerClient.Start();
+if (!savedProgress.OfflineMode)
+{
+    trackerClient.Start();
+}
+else
+{
+    Console.WriteLine("[P2P:Tracker] Offline mode — tracker registration skipped");
+}
 
 // Check matchmaking service connectivity — polls every 5 seconds.
 // Starts heartbeat when online, stops when it goes offline. Fully dynamic.
@@ -529,11 +561,20 @@ app.MapGet("/api/p2p/map", () =>
 {
     try
     {
-        var json = StaticOverworldAsset.LoadJson(PeerProtocol.GameVersionMajor);
+        string json;
+        try
+        {
+            json = StaticOverworldAsset.LoadJson(PeerProtocol.GameVersionMajor);
+        }
+        catch (FileNotFoundException)
+        {
+            json = OverworldBootstrap.EnsureAssetJson(PeerProtocol.GameVersionMajor);
+        }
         return Results.Content(json, "application/json");
     }
-    catch (FileNotFoundException)
+    catch (Exception ex)
     {
+        Console.WriteLine($"[P2P:API] Map load failed: {ex.Message}");
         return Results.NotFound();
     }
 });
@@ -572,14 +613,90 @@ app.MapPost("/api/p2p/position", (P2PPositionUpdate update, OverworldSync sync, 
 });
 
 // Set the local player's display name (called by frontend after entering name)
-app.MapPost("/api/p2p/name", (P2PNameRequest request, PeerIdentity identity) =>
+app.MapPost("/api/p2p/name", (P2PNameRequest request, PeerIdentity identity, SaveManager saves, OverworldCombatSync combat) =>
 {
     if (!string.IsNullOrWhiteSpace(request.Name))
     {
         identity.DisplayName = request.Name.Trim();
+        var data = combat.BuildSaveData();
+        data.DisplayName = identity.DisplayName;
+        data.HasCompletedFirstRun = true;
+        saves.Save(data);
         Console.WriteLine($"[P2P:API] Player name set to: {identity.DisplayName}");
     }
     return Results.Ok();
+});
+
+// First-run / identity bootstrap for frontend
+app.MapGet("/api/gameplay/bootstrap", (SaveManager saves, PeerIdentity identity) =>
+{
+    var d = saves.CurrentData;
+    var needsName = !d.HasCompletedFirstRun && string.IsNullOrWhiteSpace(d.DisplayName);
+    return Results.Ok(new BootstrapResponse(
+        NeedsName: needsName,
+        DisplayName: string.IsNullOrWhiteSpace(d.DisplayName) ? identity.DisplayName : d.DisplayName,
+        OfflineMode: d.OfflineMode,
+        Level: d.Level));
+});
+
+app.MapGet("/api/gameplay/settings", (SaveManager saves) =>
+{
+    var d = saves.CurrentData;
+    return Results.Ok(new SettingsResponse(
+        d.DisplayName, d.OfflineMode, d.MasterVolume, d.ShowGlyphOverlay, d.ShowFps,
+        d.LastSavedAt.ToString("O")));
+});
+
+app.MapPost("/api/gameplay/settings", (SettingsUpdateRequest request, SaveManager saves, PeerIdentity identity, OverworldCombatSync combat, TrackerClient tracker) =>
+{
+    var data = combat.BuildSaveData();
+    if (!string.IsNullOrWhiteSpace(request.DisplayName))
+    {
+        data.DisplayName = request.DisplayName.Trim();
+        identity.DisplayName = data.DisplayName;
+        data.HasCompletedFirstRun = true;
+    }
+    if (request.OfflineMode.HasValue)
+    {
+        var wasOffline = data.OfflineMode;
+        data.OfflineMode = request.OfflineMode.Value;
+        if (data.OfflineMode && !wasOffline)
+            tracker.Stop();
+        else if (!data.OfflineMode && wasOffline)
+            tracker.Start();
+    }
+    if (request.MasterVolume.HasValue) data.MasterVolume = Math.Clamp(request.MasterVolume.Value, 0f, 1f);
+    if (request.ShowGlyphOverlay.HasValue) data.ShowGlyphOverlay = request.ShowGlyphOverlay.Value;
+    if (request.ShowFps.HasValue) data.ShowFps = request.ShowFps.Value;
+    saves.Save(data);
+    return Results.Ok(new SettingsResponse(
+        data.DisplayName, data.OfflineMode, data.MasterVolume, data.ShowGlyphOverlay, data.ShowFps,
+        data.LastSavedAt.ToString("O")));
+});
+
+// Party REST
+app.MapGet("/api/p2p/party", (MeshPartyManager party) =>
+{
+    var s = party.GetSnapshot();
+    return Results.Ok(new PartyResponse(s.PartyId, s.LeaderPeerId, s.MemberPeerIds, s.PendingInvitePeerIds));
+});
+
+app.MapPost("/api/p2p/party/invite", (PartyInviteRequest request, MeshPartyManager party) =>
+{
+    var ok = party.Invite(request.TargetPeerId);
+    return Results.Ok(new CombatActionResponse(ok, ok ? null : "Invite failed"));
+});
+
+app.MapPost("/api/p2p/party/accept", (PartyAcceptRequest request, MeshPartyManager party) =>
+{
+    var ok = party.AcceptInvite(request.FromPeerId);
+    return Results.Ok(new CombatActionResponse(ok, null));
+});
+
+app.MapPost("/api/p2p/party/leave", (MeshPartyManager party) =>
+{
+    party.Leave();
+    return Results.Ok(new CombatActionResponse(true, null));
 });
 
 // --- DEBUG: Log what /api/p2p/players is returning ---
@@ -693,7 +810,7 @@ app.MapPost("/api/p2p/shard/switch", async (ShardSwitchRequest request, WorldSha
 // at 10Hz for responsive combat UI (stamina bar, enemy positions, cooldowns).
 
 // Get local player stats (HP, stamina, abilities, cooldowns) — polled at 10Hz by frontend
-app.MapGet("/api/gameplay/player-stats", (OverworldCombatSync combat) =>
+app.MapGet("/api/gameplay/player-stats", (OverworldCombatSync combat, SaveManager saves) =>
 {
     var p = combat.LocalPlayer;
     return Results.Ok(new PlayerStatsResponse(
@@ -701,9 +818,12 @@ app.MapGet("/api/gameplay/player-stats", (OverworldCombatSync combat) =>
         Stamina: p.Stamina, MaxStamina: p.MaxStamina,
         IsStaminaDepleted: p.IsStaminaDepleted,
         Level: p.Level, Xp: p.XP,
+        XpForNextLevel: ProgressionSystem.XPForNextLevel(p.Level),
         PrimaryAbility: p.PrimaryAbility, SecondaryAbility: p.SecondaryAbility,
         PrimaryCooldown: p.PrimaryFireCooldown, SecondaryCooldown: p.SecondaryAbilityCooldown,
-        ShieldHp: p.ShieldHP, IsShardHost: combat.IsHost));
+        ShieldHp: p.ShieldHP, IsShardHost: combat.IsHost,
+        LoadoutLocked: combat.LoadoutLocked,
+        LastSavedAt: saves.CurrentData.LastSavedAt.ToString("O")));
 });
 
 // Get all enemies (for frontend rendering) — polled at 10Hz
@@ -767,6 +887,8 @@ app.MapGet("/api/gameplay/inventory", (PlayerInventory inventory) =>
 // Equip an item from backpack slot
 app.MapPost("/api/gameplay/equip", (EquipRequest request, PlayerInventory inventory, OverworldCombatSync combat) =>
 {
+    if (combat.LoadoutLocked)
+        return Results.Ok(new CombatActionResponse(false, "Loadout locked in dungeon"));
     var success = inventory.EquipFromBackpack(request.BackpackSlot, combat.LocalPlayer);
     return Results.Ok(new CombatActionResponse(success, success ? null : "Cannot equip item"));
 });
@@ -799,10 +921,67 @@ app.MapGet("/api/gameplay/loot-drops", (LootDropManager lootManager, PeerIdentit
 // Swap abilities at a Meditation Altar
 app.MapPost("/api/gameplay/swap-abilities", (SwapAbilitiesRequest request, OverworldCombatSync combat) =>
 {
+    if (combat.LoadoutLocked)
+        return Results.Ok(new CombatActionResponse(false, "Loadout locked in dungeon"));
     if (string.IsNullOrWhiteSpace(request.Primary) || string.IsNullOrWhiteSpace(request.Secondary))
         return Results.BadRequest(new CombatActionResponse(false, "primary and secondary required"));
 
     combat.SetAbilities(request.Primary, request.Secondary);
+    return Results.Ok(new CombatActionResponse(true, null));
+});
+
+// Offer unwanted items to the Meditation Altar flame (economy TBD — Pale Marks stub)
+app.MapPost("/api/gameplay/offer-to-flame", (OfferToFlameRequest request, PlayerInventory inventory, SaveManager saves, OverworldCombatSync combat) =>
+{
+    if (combat.LoadoutLocked)
+        return Results.Ok(new OfferToFlameResponse(false, 0, "Unavailable in dungeon"));
+    if (request.BackpackSlot < 0 || request.BackpackSlot >= PlayerInventory.BackpackSize)
+        return Results.Ok(new OfferToFlameResponse(false, 0, "Invalid slot"));
+
+    var item = inventory.RemoveFromSlot(request.BackpackSlot);
+    if (item == null)
+        return Results.Ok(new OfferToFlameResponse(false, 0, "Empty slot"));
+
+    var def = ItemRegistry.GetItem(item.ItemId);
+    var marks = def?.Rarity switch
+    {
+        ItemRarity.Common => 5,
+        ItemRarity.Uncommon => 15,
+        ItemRarity.Rare => 40,
+        ItemRarity.Epic => 100,
+        _ => 5,
+    } * item.Quantity;
+    var data = combat.BuildSaveData();
+    data.PaleMarks += marks;
+    saves.Save(data);
+    return Results.Ok(new OfferToFlameResponse(true, marks, $"+{marks} Pale Marks"));
+});
+
+app.MapGet("/api/gameplay/dungeon", (DungeonInstanceManager dungeons) =>
+{
+    var snap = dungeons.GetActiveInstance();
+    if (snap == null)
+        return Results.Ok(new DungeonInstanceResponse(false, null, 0, null, null, 0, null, false));
+    return Results.Ok(new DungeonInstanceResponse(
+        true, snap.InstanceId, snap.Seed, snap.Scenario, snap.HostPeerId,
+        snap.AvgLevel, snap.Phase, snap.IsLocalHost));
+});
+
+app.MapPost("/api/gameplay/dungeon/enter", async (DungeonEnterRequest request, DungeonInstanceManager dungeons) =>
+{
+    var scenario = string.IsNullOrWhiteSpace(request.Scenario) ? "mountain_cave" : request.Scenario;
+    var started = await dungeons.EnterDungeonAsync(scenario, request.EntranceX, request.EntranceY);
+    var snap = dungeons.GetActiveInstance();
+    if (snap == null)
+        return Results.Ok(new DungeonEnterResponse(started, null));
+    return Results.Ok(new DungeonEnterResponse(started, new DungeonInstanceResponse(
+        true, snap.InstanceId, snap.Seed, snap.Scenario, snap.HostPeerId,
+        snap.AvgLevel, snap.Phase, snap.IsLocalHost)));
+});
+
+app.MapPost("/api/gameplay/dungeon/complete", async (DungeonCompleteRequest request, DungeonInstanceManager dungeons) =>
+{
+    await dungeons.CompleteDungeonAsync(request.Victory);
     return Results.Ok(new CombatActionResponse(true, null));
 });
 
@@ -832,6 +1011,14 @@ app.MapFallback(async context =>
 // rather than being abruptly killed, which could leave resources in a bad state.
 app.Lifetime.ApplicationStopping.Register(() =>
 {
+    try
+    {
+        saveManager.Shutdown(combatSync.BuildSaveData());
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Save] Shutdown save failed: {ex.Message}");
+    }
     gameLoop.Dispose();
 });
 
@@ -1082,8 +1269,18 @@ internal record CombatActionRequest(string AbilitySlot, float AimAngle);
 /// <summary>Response for GET /api/gameplay/player-stats.</summary>
 internal record PlayerStatsResponse(
     int Hp, int MaxHp, float Stamina, float MaxStamina, bool IsStaminaDepleted,
-    int Level, int Xp, string PrimaryAbility, string SecondaryAbility,
-    int PrimaryCooldown, int SecondaryCooldown, int ShieldHp, bool IsShardHost);
+    int Level, int Xp, int XpForNextLevel, string PrimaryAbility, string SecondaryAbility,
+    int PrimaryCooldown, int SecondaryCooldown, int ShieldHp, bool IsShardHost,
+    bool LoadoutLocked, string LastSavedAt);
+
+internal record BootstrapResponse(bool NeedsName, string DisplayName, bool OfflineMode, int Level);
+internal record SettingsResponse(string DisplayName, bool OfflineMode, float MasterVolume, bool ShowGlyphOverlay, bool ShowFps, string LastSavedAt);
+internal record SettingsUpdateRequest(string? DisplayName, bool? OfflineMode, float? MasterVolume, bool? ShowGlyphOverlay, bool? ShowFps);
+internal record PartyResponse(string? PartyId, string? LeaderPeerId, string[] MemberPeerIds, string[] PendingInvitePeerIds);
+internal record PartyInviteRequest(string TargetPeerId);
+internal record PartyAcceptRequest(string FromPeerId);
+internal record OfferToFlameRequest(int BackpackSlot);
+internal record OfferToFlameResponse(bool Success, int PaleMarksGained, string? Message);
 
 /// <summary>Single enemy entry for GET /api/gameplay/enemies response.</summary>
 internal record EnemyStateEntry(
@@ -1112,6 +1309,18 @@ internal record PickupLootResponse(bool Success, string? ItemId, string? Message
 internal record LootDropEntry(string DropId, string ItemId, string ItemName, string Rarity, int Quantity, float X, float Y);
 internal record LootDropsResponse(LootDropEntry[] Drops);
 internal record SwapAbilitiesRequest(string Primary, string Secondary);
+internal record DungeonEnterRequest(string? Scenario, float EntranceX, float EntranceY);
+internal record DungeonCompleteRequest(bool Victory);
+internal record DungeonInstanceResponse(
+    bool Active,
+    string? InstanceId,
+    int Seed,
+    string? Scenario,
+    string? HostPeerId,
+    int AvgLevel,
+    string? Phase,
+    bool IsLocalHost);
+internal record DungeonEnterResponse(bool Started, DungeonInstanceResponse? Instance);
 
 /// <summary>
 /// Source-generated JSON context for HTTP API response types.
@@ -1161,6 +1370,18 @@ internal record SwapAbilitiesRequest(string Primary, string Secondary);
 [JsonSerializable(typeof(LootDropEntry[]))]
 [JsonSerializable(typeof(LootDropsResponse))]
 [JsonSerializable(typeof(SwapAbilitiesRequest))]
+[JsonSerializable(typeof(DungeonEnterRequest))]
+[JsonSerializable(typeof(DungeonCompleteRequest))]
+[JsonSerializable(typeof(DungeonInstanceResponse))]
+[JsonSerializable(typeof(DungeonEnterResponse))]
+[JsonSerializable(typeof(BootstrapResponse))]
+[JsonSerializable(typeof(SettingsResponse))]
+[JsonSerializable(typeof(SettingsUpdateRequest))]
+[JsonSerializable(typeof(PartyResponse))]
+[JsonSerializable(typeof(PartyInviteRequest))]
+[JsonSerializable(typeof(PartyAcceptRequest))]
+[JsonSerializable(typeof(OfferToFlameRequest))]
+[JsonSerializable(typeof(OfferToFlameResponse))]
 [JsonSerializable(typeof(List<AvailableSession>))]
 [JsonSerializable(typeof(AvailableSession))]
 internal partial class AppJsonContext : JsonSerializerContext

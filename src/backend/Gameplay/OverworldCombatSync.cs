@@ -61,8 +61,11 @@ public sealed class OverworldCombatSync
     private readonly LootDropManager _lootDropManager;
     private readonly PlayerInventory _inventory;
     private readonly MetricsCollector _metricsCollector;
+    private readonly SaveManager? _saveManager;
+    private MeshPartyManager? _partyManager;
     private readonly CancellationTokenSource _cts = new();
     private Task? _tickLoop;
+    private bool _loadoutLocked;
 
     // Track all peers who damaged an enemy (for elite personal drops)
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _enemyAttackers = new();
@@ -96,7 +99,8 @@ public sealed class OverworldCombatSync
         OverworldSync overworldSync,
         LootDropManager lootDropManager,
         PlayerInventory inventory,
-        MetricsCollector metricsCollector)
+        MetricsCollector metricsCollector,
+        SaveManager? saveManager = null)
     {
         _mesh = mesh;
         _localIdentity = localIdentity;
@@ -107,6 +111,7 @@ public sealed class OverworldCombatSync
         _lootDropManager = lootDropManager;
         _inventory = inventory;
         _metricsCollector = metricsCollector;
+        _saveManager = saveManager;
 
         // Initialize local player entity with defaults
         _localPlayer = new Entity
@@ -121,7 +126,7 @@ public sealed class OverworldCombatSync
             MaxStamina = 100f,
             StaminaRegenRate = 40f,
             Level = 1,
-            PrimaryAbility = "ember_spray",    // Default loadout
+            PrimaryAbility = "ember_spray",
             SecondaryAbility = "iron_veil",
             IsAlive = true,
         };
@@ -135,6 +140,19 @@ public sealed class OverworldCombatSync
 
         // Subscribe to P2P combat messages
         _mesh.OnPeerMessage += HandlePeerMessage;
+
+        if (_saveManager != null)
+            ApplySaveData(_saveManager.Load());
+    }
+
+    /// <summary>Wire party manager after DI construction (avoids circular deps).</summary>
+    public void SetPartyManager(MeshPartyManager partyManager) => _partyManager = partyManager;
+
+    /// <summary>When true, equip/ability changes are refused (in dungeon).</summary>
+    public bool LoadoutLocked
+    {
+        get => _loadoutLocked;
+        set => _loadoutLocked = value;
     }
 
     // =========================================================================
@@ -623,6 +641,9 @@ public sealed class OverworldCombatSync
             case PeerMessageTypes.MetricsUpdate when message.MetricsUpdate != null:
                 _metricsCollector.StoreRemoteMetrics(message.MetricsUpdate);
                 break;
+            case PeerMessageTypes.XpAward when message.XpAward != null:
+                HandleXpAward(message.XpAward);
+                break;
         }
     }
 
@@ -834,10 +855,121 @@ public sealed class OverworldCombatSync
     /// </summary>
     public void SetAbilities(string primary, string secondary)
     {
+        if (_loadoutLocked) return;
         if (AbilityRegistry.GetAbility(primary) is { Slot: AbilitySlot.Primary })
             _localPlayer.PrimaryAbility = primary;
         if (AbilityRegistry.GetAbility(secondary) is { Slot: AbilitySlot.Secondary })
             _localPlayer.SecondaryAbility = secondary;
+    }
+
+    /// <summary>Apply encrypted save data to local player + inventory.</summary>
+    public void ApplySaveData(PlayerSaveData data)
+    {
+        ProgressionSystem.ApplyLoadedProgression(_localPlayer, data.Level, data.XP);
+        _localPlayer.PrimaryAbility = data.PrimaryAbility;
+        _localPlayer.SecondaryAbility = data.SecondaryAbility;
+
+        var restoreX = data.WasInDungeon ? data.LastSafeOverworldX : data.LastX;
+        var restoreY = data.WasInDungeon ? data.LastSafeOverworldY : data.LastY;
+        _localPlayer.X = restoreX;
+        _localPlayer.Y = restoreY;
+        _overworldSync.UpdateLocalPosition(restoreX, restoreY, 0, 0);
+
+        var equip = new Dictionary<string, string?>
+        {
+            ["weapon"] = data.WeaponSlot,
+            ["armor"] = data.ArmorSlot,
+            ["trinket"] = data.TrinketSlot,
+            ["boots"] = data.BootsSlot,
+        };
+        _inventory.LoadEquipment(equip);
+
+        var backpack = data.Backpack
+            .Select(s => s == null ? ((string ItemId, int Quantity)?)null : (s.ItemId, s.Quantity))
+            .ToList();
+        _inventory.LoadBackpack(backpack);
+        _inventory.ApplyAllEquipmentStats(_localPlayer);
+
+        if (!string.IsNullOrWhiteSpace(data.DisplayName))
+            _localIdentity.DisplayName = data.DisplayName;
+
+        Console.WriteLine($"[Save] Applied to combat: Lv{_localPlayer.Level} at ({restoreX:F1},{restoreY:F1})");
+    }
+
+    /// <summary>Snapshot live state into save data (preserves settings fields from current save).</summary>
+    public PlayerSaveData BuildSaveData()
+    {
+        var existing = _saveManager?.CurrentData ?? new PlayerSaveData();
+        var equip = _inventory.GetEquipmentForSave();
+        var backpack = _inventory.GetBackpackForSave();
+
+        return new PlayerSaveData
+        {
+            Version = 2,
+            DisplayName = string.IsNullOrWhiteSpace(_localIdentity.DisplayName)
+                ? existing.DisplayName
+                : _localIdentity.DisplayName,
+            HasCompletedFirstRun = existing.HasCompletedFirstRun || !string.IsNullOrWhiteSpace(_localIdentity.DisplayName),
+            OfflineMode = existing.OfflineMode,
+            MasterVolume = existing.MasterVolume,
+            ShowGlyphOverlay = existing.ShowGlyphOverlay,
+            ShowFps = existing.ShowFps,
+            Level = _localPlayer.Level,
+            XP = _localPlayer.XP,
+            PaleMarks = existing.PaleMarks,
+            PrimaryAbility = _localPlayer.PrimaryAbility,
+            SecondaryAbility = _localPlayer.SecondaryAbility,
+            UnlockedAbilityIds = existing.UnlockedAbilityIds,
+            UnlockedItemIds = existing.UnlockedItemIds,
+            WeaponSlot = equip.GetValueOrDefault("weapon"),
+            ArmorSlot = equip.GetValueOrDefault("armor"),
+            TrinketSlot = equip.GetValueOrDefault("trinket"),
+            BootsSlot = equip.GetValueOrDefault("boots"),
+            Backpack = backpack.Select(s => s == null
+                ? null
+                : new SaveInventorySlot { ItemId = s.Value.ItemId, Quantity = s.Value.Quantity }).ToList(),
+            LastX = _localPlayer.X,
+            LastY = _localPlayer.Y,
+            LastSafeOverworldX = existing.WasInDungeon ? existing.LastSafeOverworldX : _localPlayer.X,
+            LastSafeOverworldY = existing.WasInDungeon ? existing.LastSafeOverworldY : _localPlayer.Y,
+            WasInDungeon = existing.WasInDungeon,
+            CreatedAt = existing.CreatedAt == default ? DateTime.UtcNow : existing.CreatedAt,
+            LastSavedAt = DateTime.UtcNow,
+        };
+    }
+
+    public void MarkEnteredDungeon(float safeX, float safeY)
+    {
+        if (_saveManager == null) return;
+        var data = BuildSaveData();
+        data.WasInDungeon = true;
+        data.LastSafeOverworldX = safeX;
+        data.LastSafeOverworldY = safeY;
+        data.LastX = safeX;
+        data.LastY = safeY;
+        _saveManager.Save(data);
+        _loadoutLocked = true;
+        _overworldSync.UpdateLocalStatus("in_dungeon", _partyManager?.PartyId, _partyManager?.IsLeader ?? false);
+    }
+
+    public void MarkLeftDungeon()
+    {
+        _loadoutLocked = false;
+        if (_saveManager != null)
+        {
+            var data = BuildSaveData();
+            data.WasInDungeon = false;
+            data.LastX = data.LastSafeOverworldX;
+            data.LastY = data.LastSafeOverworldY;
+            _localPlayer.X = data.LastX;
+            _localPlayer.Y = data.LastY;
+            _overworldSync.UpdateLocalPosition(data.LastX, data.LastY, 0, 0);
+            _saveManager.Save(data);
+        }
+        _overworldSync.UpdateLocalStatus(
+            _partyManager?.IsInParty == true ? "in_party" : "exploring",
+            _partyManager?.PartyId,
+            _partyManager?.IsLeader ?? false);
     }
 
     // =========================================================================
@@ -861,6 +993,9 @@ public sealed class OverworldCombatSync
     {
         _enemyAttackers.TryRemove(enemy.Id, out var attackers);
 
+        // XP: eligibility mirrors loot (tag/killer + party members)
+        await AwardKillXpAsync(enemy, killerPeerId, attackers?.Keys.ToArray());
+
         if (IsEliteEnemy(enemy))
         {
             var attackerIds = attackers?.Keys.ToArray()
@@ -879,6 +1014,73 @@ public sealed class OverworldCombatSync
             .Where(d => d.CreatedAtServerTick == _tickCount)
             .ToList();
         await BroadcastLootDropsAsync(newDrops);
+    }
+
+    private async Task AwardKillXpAsync(Entity enemy, string? killerPeerId, string[]? attackerIds)
+    {
+        HashSet<string> eligible;
+        if (IsEliteEnemy(enemy) && attackerIds is { Length: > 0 })
+        {
+            eligible = new HashSet<string>(attackerIds, StringComparer.Ordinal);
+        }
+        else
+        {
+            var partyMembers = GetPartyMembersForPeer(killerPeerId ?? enemy.TaggedBy);
+            eligible = LootSystem.DetermineEligibility(enemy.TaggedBy ?? killerPeerId, partyMembers);
+            if (eligible.Count == 0 && killerPeerId != null)
+                eligible.Add(killerPeerId);
+        }
+
+        var xpAmount = ProgressionSystem.ComputeSharedKillXp(enemy.SubType, eligible.Count);
+        var payload = new PeerXpAwardPayload
+        {
+            EnemyId = enemy.Id,
+            EnemySubType = enemy.SubType,
+            XpAmount = xpAmount,
+            EligiblePeerIds = eligible.ToArray(),
+            ServerTick = _tickCount,
+        };
+
+        // Apply locally if eligible
+        ApplyXpAward(payload);
+
+        // Host broadcasts so other eligible peers apply the same amount
+        if (_hostManager.IsLocalHost || eligible.Contains(_localIdentity.PeerId))
+        {
+            var msg = new PeerMessage
+            {
+                Type = PeerMessageTypes.XpAward,
+                XpAward = payload,
+            };
+            await _mesh.BroadcastAsync(msg);
+        }
+    }
+
+    private readonly ConcurrentDictionary<string, byte> _recentXpAwards = new();
+
+    private void ApplyXpAward(PeerXpAwardPayload payload)
+    {
+        if (!payload.EligiblePeerIds.Contains(_localIdentity.PeerId))
+            return;
+
+        var key = $"{payload.EnemyId}:{payload.ServerTick}";
+        if (!_recentXpAwards.TryAdd(key, 0))
+            return;
+        if (_recentXpAwards.Count > 200)
+        {
+            foreach (var old in _recentXpAwards.Keys.Take(100).ToList())
+                _recentXpAwards.TryRemove(old, out _);
+        }
+
+        var leveled = ProgressionSystem.AwardXP(_localPlayer, payload.XpAmount);
+        Console.WriteLine($"[XP] +{payload.XpAmount} from {payload.EnemySubType}" +
+            (leveled ? $" → LEVEL {_localPlayer.Level}!" : $" (now {_localPlayer.XP}/{ProgressionSystem.XPForNextLevel(_localPlayer.Level)})"));
+    }
+
+    private void HandleXpAward(PeerXpAwardPayload payload)
+    {
+        // Avoid double-applying if we already awarded as host for same tick+enemy
+        ApplyXpAward(payload);
     }
 
     private void GenerateNormalLootForKill(Entity enemy, string? killerPeerId)
@@ -950,8 +1152,7 @@ public sealed class OverworldCombatSync
 
     private IEnumerable<string>? GetPartyMembersForPeer(string? peerId)
     {
-        // Party sync integration placeholder — solo until party loot wiring is complete.
-        return null;
+        return _partyManager?.GetPartyMembersForPeer(peerId);
     }
 
     // =========================================================================

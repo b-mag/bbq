@@ -203,7 +203,12 @@ public enum MapScenario
     /// The Hollow — Generic cave dungeon. BSP-generated, 3 waves + mini-boss.
     /// Shorter dungeon for quick runs.
     /// </summary>
-    Hollow
+    Hollow,
+    /// <summary>
+    /// Mountain Cave — Cellular-automata / drunkard-walk cave, ~60x50.
+    /// Mesh-native dungeon instance entered from the overworld.
+    /// </summary>
+    MountainCave
 }
 
 // =============================================================================
@@ -285,6 +290,12 @@ public sealed class TileMap
     /// </summary>
     public (float X, float Y) FindPlayerSpawn(Random rng)
     {
+        foreach (var sp in SpawnPoints)
+        {
+            if (sp.Type == SpawnPointType.Player && IsWalkable(sp.X, sp.Y))
+                return (sp.X + 0.5f, sp.Y + 0.5f);
+        }
+
         // Try rooms first — spawning in a room center is safe and grouped
         if (Rooms.Length > 0)
         {

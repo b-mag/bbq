@@ -186,6 +186,7 @@ public sealed class SessionManager
             _gameLoop.State.Map = SelectedScenario switch
             {
                 MapScenario.PallidSanctum => MapGenerator.GenerateTemple(100, 100, seed),
+                MapScenario.MountainCave => MapGenerator.GenerateCave(60, 50, seed),
                 _ => MapGenerator.Generate(80, 60, seed) // Warehouse (default)
             };
             _gameLoop.State.Phase = GamePhase.Playing;
@@ -406,6 +407,8 @@ public sealed class SessionManager
                         SelectedScenario = message.SessionAction.Value switch
                         {
                             "temple" => MapScenario.PallidSanctum,
+                            "mountain_cave" or "cave" => MapScenario.MountainCave,
+                            "hollow" => MapScenario.Hollow,
                             _ => MapScenario.DrownedDock
                         };
                         Console.WriteLine($"[Session] Scenario set to {SelectedScenario}");
@@ -458,6 +461,7 @@ public sealed class SessionManager
                 {
                     MapScenario.PallidSanctum => "pallid_sanctum",
                     MapScenario.Hollow => "hollow",
+                    MapScenario.MountainCave => "mountain_cave",
                     _ => "drowned_dock"
                 }
             };

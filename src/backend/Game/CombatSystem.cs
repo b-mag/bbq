@@ -87,9 +87,10 @@ public static class CombatSystem
         if (ability.Slot == AbilitySlot.Primary && player.PrimaryFireCooldown > 0) return false;
         if (ability.Slot == AbilitySlot.Secondary && player.SecondaryAbilityCooldown > 0) return false;
 
-        // --- Stamina check and drain ---
-        if (!StaminaSystem.CanUseAbility(player, ability.StaminaCost)) return false;
-        StaminaSystem.ProcessStaminaDrain(player, ability.StaminaCost);
+        // --- Stamina check and drain (equipment can reduce cost) ---
+        var staminaCost = Math.Max(1f, ability.StaminaCost - player.StaminaCostReduction);
+        if (!StaminaSystem.CanUseAbility(player, staminaCost)) return false;
+        StaminaSystem.ProcessStaminaDrain(player, staminaCost);
 
         // --- Set cooldown ---
         if (ability.Slot == AbilitySlot.Primary)
@@ -97,23 +98,27 @@ public static class CombatSystem
         else
             player.SecondaryAbilityCooldown = ability.CooldownTicks;
 
+        // Effective damage/heal includes equipped gear bonuses on the entity
+        var damage = ability.Damage + Math.Max(0, player.Damage);
+        var heal = ability.HealAmount + Math.Max(0, player.BonusHealAmount);
+
         // --- Dispatch to ability-type handler ---
         switch (ability.Type)
         {
             case AbilityType.RangedAoE:
-                ExecuteRangedAoE(state, player, ability, aimAngle);
+                ExecuteRangedAoE(state, player, ability, aimAngle, damage);
                 break;
 
             case AbilityType.Melee:
-                ExecuteMelee(state, player, ability, aimAngle);
+                ExecuteMelee(state, player, ability, aimAngle, damage);
                 break;
 
             case AbilityType.RangedSingle:
-                ExecuteRangedSingle(state, player, ability, aimAngle);
+                ExecuteRangedSingle(state, player, ability, aimAngle, damage);
                 break;
 
             case AbilityType.HealAoE:
-                ExecuteHealAoE(state, player, ability);
+                ExecuteHealAoE(state, player, ability, heal);
                 break;
 
             case AbilityType.Shield:
@@ -138,7 +143,7 @@ public static class CombatSystem
     /// Each projectile does individual damage — hitting with all rewards close range.
     /// Inherits the old Tommy Gun pattern but themed as burning embers.
     /// </summary>
-    private static void ExecuteRangedAoE(GameState state, Entity player, AbilityDefinition ability, float aimAngle)
+    private static void ExecuteRangedAoE(GameState state, Entity player, AbilityDefinition ability, float aimAngle, int damage)
     {
         var rng = Random.Shared;
 
@@ -162,7 +167,7 @@ public static class CombatSystem
 
             CreateProjectileWithLifetime(
                 state, player, ability.Id, finalAngle,
-                ability.ProjectileSpeed, ability.Damage, ability.Range);
+                ability.ProjectileSpeed, damage, ability.Range);
         }
     }
 
@@ -171,7 +176,7 @@ public static class CombatSystem
     /// Hits the FIRST enemy within range — single target, no projectile created.
     /// High damage, low cost, but requires point-blank range (risk/reward).
     /// </summary>
-    private static void ExecuteMelee(GameState state, Entity player, AbilityDefinition ability, float aimAngle)
+    private static void ExecuteMelee(GameState state, Entity player, AbilityDefinition ability, float aimAngle, int damage)
     {
         // Calculate the melee hit point (halfway along the aim direction within range)
         float meleeX = player.X + MathF.Cos(aimAngle) * ability.Range * 0.5f;
@@ -194,7 +199,7 @@ public static class CombatSystem
 
             if (distSq <= ability.Range * ability.Range)
             {
-                entity.TakeDamage(ability.Damage);
+                entity.TakeDamage(damage);
                 entity.IsDirty = true;
 
                 // Set tag if this is the first hit on this enemy (RuneScape loot rights)
@@ -212,11 +217,11 @@ public static class CombatSystem
     /// Void Bolt: Fire a single high-damage projectile with long range.
     /// Slow cooldown forces careful aim — missing is costly (wasted stamina + cooldown).
     /// </summary>
-    private static void ExecuteRangedSingle(GameState state, Entity player, AbilityDefinition ability, float aimAngle)
+    private static void ExecuteRangedSingle(GameState state, Entity player, AbilityDefinition ability, float aimAngle, int damage)
     {
         CreateProjectileWithLifetime(
             state, player, ability.Id, aimAngle,
-            ability.ProjectileSpeed, ability.Damage, ability.Range);
+            ability.ProjectileSpeed, damage, ability.Range);
     }
 
     /// <summary>
@@ -224,9 +229,10 @@ public static class CombatSystem
     /// Most expensive ability — rewards party play and careful timing.
     /// Heals self as well (solo players aren't punished for taking a heal ability).
     /// </summary>
-    private static void ExecuteHealAoE(GameState state, Entity player, AbilityDefinition ability)
+    private static void ExecuteHealAoE(GameState state, Entity player, AbilityDefinition ability, int healAmount)
     {
-        float radiusSq = ability.AreaRadius * ability.AreaRadius;
+        float radius = ability.AreaRadius > 0 ? ability.AreaRadius : ability.Range;
+        float radiusSq = radius * radius;
 
         foreach (var (_, entity) in state.Entities)
         {
@@ -239,12 +245,12 @@ public static class CombatSystem
 
             if (distSq <= radiusSq)
             {
-                entity.Heal(ability.HealAmount);
+                entity.Heal(healAmount);
             }
         }
 
         // Always heal self even if somehow outside own radius (safety)
-        player.Heal(ability.HealAmount);
+        player.Heal(healAmount);
     }
 
     /// <summary>

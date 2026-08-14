@@ -228,6 +228,8 @@ public sealed class PlayerInventory
         entity.StaminaRegenRate += stats.BonusStaminaRegen;
         entity.Speed += stats.BonusMoveSpeed;
         entity.MaxStamina += stats.BonusMaxStamina;
+        entity.StaminaCostReduction += stats.StaminaCostReduction;
+        entity.BonusHealAmount += stats.BonusHealAmount;
     }
 
     /// <summary>Remove stat modifiers (reverse of ApplyStats).</summary>
@@ -240,6 +242,8 @@ public sealed class PlayerInventory
         entity.StaminaRegenRate -= stats.BonusStaminaRegen;
         entity.Speed -= stats.BonusMoveSpeed;
         entity.MaxStamina -= stats.BonusMaxStamina;
+        entity.StaminaCostReduction -= stats.StaminaCostReduction;
+        entity.BonusHealAmount -= stats.BonusHealAmount;
     }
 
     // =========================================================================

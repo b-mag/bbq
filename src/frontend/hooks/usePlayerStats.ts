@@ -27,6 +27,9 @@ export interface PlayerStats {
   isStaminaDepleted: boolean;
   level: number;
   xp: number;
+  xpForNextLevel: number;
+  loadoutLocked: boolean;
+  lastSavedAt: string;
   primaryAbility: string;
   secondaryAbility: string;
   primaryCooldown: number;
@@ -43,6 +46,9 @@ const DEFAULT_STATS: PlayerStats = {
   isStaminaDepleted: false,
   level: 1,
   xp: 0,
+  xpForNextLevel: 200,
+  loadoutLocked: false,
+  lastSavedAt: '',
   primaryAbility: 'ember_spray',
   secondaryAbility: 'iron_veil',
   primaryCooldown: 0,
@@ -65,7 +71,13 @@ export function usePlayerStats(): PlayerStats {
         const res = await fetch('/api/gameplay/player-stats');
         if (res.ok) {
           const data = await res.json();
-          setStats(data);
+          setStats({
+            ...DEFAULT_STATS,
+            ...data,
+            xpForNextLevel: data.xpForNextLevel ?? DEFAULT_STATS.xpForNextLevel,
+            loadoutLocked: data.loadoutLocked ?? false,
+            lastSavedAt: data.lastSavedAt ?? '',
+          });
         }
       } catch {
         // Silently fail — server might not be ready yet

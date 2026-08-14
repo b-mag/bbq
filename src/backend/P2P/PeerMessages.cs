@@ -79,6 +79,15 @@ public sealed class PeerMessage
     public PeerLootPickupPayload? LootPickup { get; set; }
     public PeerLootFairGamePayload? LootFairGame { get; set; }
     public PeerMetricsUpdatePayload? MetricsUpdate { get; set; }
+
+    // --- Progression ---
+    public PeerXpAwardPayload? XpAward { get; set; }
+
+    // --- Dungeon instance ---
+    public PeerDungeonStartPayload? DungeonStart { get; set; }
+    public PeerDungeonStatePayload? DungeonState { get; set; }
+    public PeerDungeonCompletePayload? DungeonComplete { get; set; }
+    public PeerDungeonInputPayload? DungeonInput { get; set; }
 }
 
 /// <summary>
@@ -124,4 +133,13 @@ public static class PeerMessageTypes
     public const string LootPickup = "loot_pickup";
     public const string LootFairGame = "loot_fair_game";
     public const string MetricsUpdate = "metrics_update";
+
+    // Progression
+    public const string XpAward = "xp_award";
+
+    // Dungeon instance (mesh-native)
+    public const string DungeonStart = "dungeon_start";
+    public const string DungeonState = "dungeon_state";
+    public const string DungeonComplete = "dungeon_complete";
+    public const string DungeonInput = "dungeon_input";
 }

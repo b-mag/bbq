@@ -205,7 +205,8 @@ public sealed class OverworldSync
     public void Start()
     {
         _broadcastTask = Task.Run(() => BroadcastLoop(_cts.Token));
-        Console.WriteLine("[P2P:Sync] Overworld state sync started (20Hz broadcast)");
+        _ = Task.Run(() => KeepaliveLoop(_cts.Token));
+        Console.WriteLine("[P2P:Sync] Overworld state sync started (20Hz broadcast + keepalives)");
     }
 
     /// <summary>
@@ -259,6 +260,28 @@ public sealed class OverworldSync
             catch (Exception ex)
             {
                 Console.WriteLine($"[P2P:Sync] Broadcast error: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Periodic keepalives so LatencyMs is real and dead peers are pruned.
+    /// </summary>
+    private async Task KeepaliveLoop(CancellationToken ct)
+    {
+        var interval = TimeSpan.FromSeconds(PeerProtocol.KeepaliveIntervalSeconds);
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(interval, ct);
+                await _mesh.SendKeepalivesAsync();
+                await _mesh.CheckConnectionHealthAsync();
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[P2P:Sync] Keepalive error: {ex.Message}");
             }
         }
     }

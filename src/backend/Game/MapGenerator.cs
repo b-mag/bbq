@@ -190,6 +190,388 @@ public static class MapGenerator
         };
     }
 
+    /// <summary>
+    /// Generate a Mountain Cave: start filled with Wall, carve Floor caverns via
+    /// drunkard-walk plus cellular automata, then flood-fill from the entrance
+    /// and cut corridors so every room is reachable. Default usage is ~60x50.
+    /// Seeded Random for determinism.
+    /// </summary>
+    public static TileMap GenerateCave(int width, int height, int seed)
+    {
+        if (width < 16) width = 16;
+        if (height < 16) height = 16;
+
+        var rng = new Random(seed);
+        var tiles = new byte[width * height];
+        Array.Fill(tiles, (byte)TileType.Wall);
+
+        var entranceX = width / 2;
+        var entranceY = height - 3;
+
+        var walkerCount = Math.Max(8, (width * height) / 350);
+        var steps = Math.Max(width * height / 10, 200);
+
+        DrunkardWalk(tiles, width, height, rng, entranceX, entranceY, steps + steps / 2, radius: 1);
+        for (int i = 1; i < walkerCount; i++)
+        {
+            var sx = rng.Next(2, width - 2);
+            var sy = rng.Next(2, height - 2);
+            var radius = rng.Next(2) == 0 ? 1 : 2;
+            DrunkardWalk(tiles, width, height, rng, sx, sy, steps, radius);
+        }
+
+        SmoothCaveCellularAutomata(tiles, width, height, iterations: 4);
+        EnforceCaveBorder(tiles, width, height);
+
+        CarveEntranceCorridor(tiles, width, height, entranceX, entranceY);
+        var (spawnX, spawnY) = FindCaveEntranceSpawn(tiles, width, height, entranceX, entranceY);
+
+        EnsureCaveConnectivity(tiles, width, height, spawnX, spawnY);
+        CarveEntranceCorridor(tiles, width, height, entranceX, entranceY);
+        (spawnX, spawnY) = FindCaveEntranceSpawn(tiles, width, height, entranceX, entranceY);
+
+        var rooms = IdentifyCaveRooms(tiles, width, height, minTiles: 12);
+        if (rooms.Count == 0)
+        {
+            var rw = Math.Min(16, width - 6);
+            var rh = Math.Min(12, height - 6);
+            var rx = Math.Max(2, entranceX - rw / 2);
+            var ry = Math.Max(2, height / 2 - rh / 2);
+            var fallback = new Room(rx, ry, rw, rh);
+            CarveCaveRect(tiles, width, fallback);
+            rooms.Add(fallback);
+            EnsureCaveConnectivity(tiles, width, height, spawnX, spawnY);
+        }
+
+        var spawnPoints = new List<SpawnPoint>
+        {
+            new SpawnPoint(spawnX, spawnY, SpawnPointType.Player)
+        };
+        foreach (var room in rooms)
+        {
+            if (tiles[room.Center.Y * width + room.Center.X] == (byte)TileType.Floor)
+                spawnPoints.Add(new SpawnPoint(room.Center.X, room.Center.Y, SpawnPointType.Room));
+        }
+
+        return new TileMap
+        {
+            Width = width,
+            Height = height,
+            Tiles = tiles,
+            Seed = seed,
+            Rooms = rooms.ToArray(),
+            SpawnPoints = spawnPoints.ToArray()
+        };
+    }
+
+    private static void DrunkardWalk(byte[] tiles, int width, int height, Random rng,
+        int startX, int startY, int steps, int radius)
+    {
+        int x = Math.Clamp(startX, 1, width - 2);
+        int y = Math.Clamp(startY, 1, height - 2);
+        int[] dirX = [0, 0, -1, 1];
+        int[] dirY = [-1, 1, 0, 0];
+
+        for (int s = 0; s < steps; s++)
+        {
+            for (int oy = -radius; oy <= radius; oy++)
+            {
+                for (int ox = -radius; ox <= radius; ox++)
+                {
+                    var cx = x + ox;
+                    var cy = y + oy;
+                    if (cx >= 1 && cx < width - 1 && cy >= 1 && cy < height - 1)
+                        tiles[cy * width + cx] = (byte)TileType.Floor;
+                }
+            }
+
+            var dir = rng.Next(4);
+            if (rng.Next(5) == 0)
+            {
+                var cx = width / 2;
+                var cy = height / 2;
+                dir = Math.Abs(cx - x) > Math.Abs(cy - y)
+                    ? (x < cx ? 3 : 2)
+                    : (y < cy ? 1 : 0);
+            }
+
+            var nx = x + dirX[dir];
+            var ny = y + dirY[dir];
+            if (nx >= 1 && nx < width - 1 && ny >= 1 && ny < height - 1)
+            {
+                x = nx;
+                y = ny;
+            }
+        }
+    }
+
+    private static void SmoothCaveCellularAutomata(byte[] tiles, int width, int height, int iterations)
+    {
+        var buffer = new byte[tiles.Length];
+        for (int i = 0; i < iterations; i++)
+        {
+            Array.Copy(tiles, buffer, tiles.Length);
+            for (int y = 1; y < height - 1; y++)
+            {
+                for (int x = 1; x < width - 1; x++)
+                {
+                    var walls = 0;
+                    for (int dy = -1; dy <= 1; dy++)
+                    {
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            if (dx == 0 && dy == 0) continue;
+                            if (buffer[(y + dy) * width + (x + dx)] == (byte)TileType.Wall)
+                                walls++;
+                        }
+                    }
+                    tiles[y * width + x] = walls >= 5
+                        ? (byte)TileType.Wall
+                        : (byte)TileType.Floor;
+                }
+            }
+        }
+    }
+
+    private static void EnforceCaveBorder(byte[] tiles, int width, int height)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            tiles[x] = (byte)TileType.Wall;
+            tiles[(height - 1) * width + x] = (byte)TileType.Wall;
+        }
+        for (int y = 0; y < height; y++)
+        {
+            tiles[y * width] = (byte)TileType.Wall;
+            tiles[y * width + (width - 1)] = (byte)TileType.Wall;
+        }
+    }
+
+    private static void CarveEntranceCorridor(byte[] tiles, int width, int height, int entranceX, int entranceY)
+    {
+        entranceX = Math.Clamp(entranceX, 2, width - 3);
+        entranceY = Math.Clamp(entranceY, 2, height - 2);
+
+        for (int y = height - 2; y >= Math.Max(2, entranceY - 8); y--)
+        {
+            tiles[y * width + entranceX] = (byte)TileType.Floor;
+            tiles[y * width + entranceX - 1] = (byte)TileType.Floor;
+            tiles[y * width + entranceX + 1] = (byte)TileType.Floor;
+        }
+    }
+
+    private static (int X, int Y) FindCaveEntranceSpawn(byte[] tiles, int width, int height, int hintX, int hintY)
+    {
+        var mid = Math.Clamp(hintX, 2, width - 3);
+        var startY = Math.Clamp(hintY, 2, height - 3);
+
+        for (int y = startY; y >= height / 2; y--)
+        {
+            for (int dx = 0; dx <= width / 3; dx++)
+            {
+                foreach (var x in new[] { mid + dx, mid - dx })
+                {
+                    if (x < 2 || x >= width - 2) continue;
+                    if (tiles[y * width + x] == (byte)TileType.Floor
+                        && CountFloorNeighbors(tiles, width, height, x, y) >= 3)
+                        return (x, y);
+                }
+            }
+        }
+
+        for (int y = height - 3; y >= 2; y--)
+        {
+            for (int x = 2; x < width - 2; x++)
+            {
+                if (tiles[y * width + x] == (byte)TileType.Floor)
+                    return (x, y);
+            }
+        }
+
+        return (Math.Clamp(mid, 2, width - 3), Math.Clamp(height / 2, 2, height - 3));
+    }
+
+    private static int CountFloorNeighbors(byte[] tiles, int width, int height, int x, int y)
+    {
+        var n = 0;
+        for (int dy = -1; dy <= 1; dy++)
+        {
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                if (dx == 0 && dy == 0) continue;
+                var nx = x + dx;
+                var ny = y + dy;
+                if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+                if (tiles[ny * width + nx] == (byte)TileType.Floor)
+                    n++;
+            }
+        }
+        return n;
+    }
+
+    private static List<Room> IdentifyCaveRooms(byte[] tiles, int width, int height, int minTiles)
+    {
+        var rooms = new List<Room>();
+        var seen = new bool[width * height];
+
+        for (int y = 1; y < height - 1; y++)
+        {
+            for (int x = 1; x < width - 1; x++)
+            {
+                var idx = y * width + x;
+                if (seen[idx] || tiles[idx] != (byte)TileType.Floor)
+                    continue;
+
+                var region = FloodFillFloor(tiles, width, height, x, y, seen);
+                if (region.Count < minTiles)
+                {
+                    foreach (var (rx, ry) in region)
+                        tiles[ry * width + rx] = (byte)TileType.Wall;
+                    continue;
+                }
+
+                int minX = int.MaxValue, minY = int.MaxValue, maxX = 0, maxY = 0;
+                foreach (var (rx, ry) in region)
+                {
+                    if (rx < minX) minX = rx;
+                    if (ry < minY) minY = ry;
+                    if (rx > maxX) maxX = rx;
+                    if (ry > maxY) maxY = ry;
+                }
+
+                rooms.Add(new Room(minX, minY, Math.Max(1, maxX - minX + 1), Math.Max(1, maxY - minY + 1)));
+            }
+        }
+
+        return rooms;
+    }
+
+    private static List<(int X, int Y)> FloodFillFloor(byte[] tiles, int width, int height, int startX, int startY, bool[]? seen = null)
+    {
+        seen ??= new bool[width * height];
+        var region = new List<(int X, int Y)>();
+        var queue = new Queue<(int X, int Y)>();
+        queue.Enqueue((startX, startY));
+        seen[startY * width + startX] = true;
+
+        while (queue.Count > 0)
+        {
+            var (x, y) = queue.Dequeue();
+            if (tiles[y * width + x] != (byte)TileType.Floor)
+                continue;
+
+            region.Add((x, y));
+            TryEnqueue(x + 1, y);
+            TryEnqueue(x - 1, y);
+            TryEnqueue(x, y + 1);
+            TryEnqueue(x, y - 1);
+        }
+
+        return region;
+
+        void TryEnqueue(int nx, int ny)
+        {
+            if (nx < 1 || ny < 1 || nx >= width - 1 || ny >= height - 1)
+                return;
+            var i = ny * width + nx;
+            if (seen[i] || tiles[i] != (byte)TileType.Floor)
+                return;
+            seen[i] = true;
+            queue.Enqueue((nx, ny));
+        }
+    }
+
+    private static void EnsureCaveConnectivity(byte[] tiles, int width, int height, int spawnX, int spawnY)
+    {
+        if (spawnX < 1 || spawnY < 1 || spawnX >= width - 1 || spawnY >= height - 1)
+            return;
+        if (tiles[spawnY * width + spawnX] != (byte)TileType.Floor)
+            tiles[spawnY * width + spawnX] = (byte)TileType.Floor;
+
+        var reachable = new HashSet<(int X, int Y)>(FloodFillFloor(tiles, width, height, spawnX, spawnY));
+        if (reachable.Count == 0)
+            return;
+
+        var seen = new bool[width * height];
+        foreach (var (x, y) in reachable)
+            seen[y * width + x] = true;
+
+        for (int y = 1; y < height - 1; y++)
+        {
+            for (int x = 1; x < width - 1; x++)
+            {
+                if (tiles[y * width + x] != (byte)TileType.Floor || seen[y * width + x])
+                    continue;
+
+                var region = FloodFillFloor(tiles, width, height, x, y, seen);
+                if (region.Count < 8)
+                {
+                    foreach (var (rx, ry) in region)
+                        tiles[ry * width + rx] = (byte)TileType.Wall;
+                    continue;
+                }
+
+                var bestD = int.MaxValue;
+                (int X, int Y) from = (x, y);
+                (int X, int Y) to = reachable.First();
+                foreach (var cell in region)
+                {
+                    foreach (var dest in reachable)
+                    {
+                        var d = Math.Abs(cell.X - dest.X) + Math.Abs(cell.Y - dest.Y);
+                        if (d < bestD)
+                        {
+                            bestD = d;
+                            from = cell;
+                            to = dest;
+                        }
+                    }
+                }
+
+                CarveCaveCorridor(tiles, width, height, from.X, from.Y, to.X, to.Y);
+                foreach (var cell in region)
+                    reachable.Add(cell);
+            }
+        }
+    }
+
+    private static void CarveCaveCorridor(byte[] tiles, int width, int height, int x1, int y1, int x2, int y2)
+    {
+        var x = x1;
+        var y = y1;
+        while (x != x2)
+        {
+            x += Math.Sign(x2 - x);
+            SetCaveFloor(tiles, width, height, x, y);
+            SetCaveFloor(tiles, width, height, x, y - 1);
+        }
+        while (y != y2)
+        {
+            y += Math.Sign(y2 - y);
+            SetCaveFloor(tiles, width, height, x, y);
+            SetCaveFloor(tiles, width, height, x - 1, y);
+        }
+    }
+
+    private static void SetCaveFloor(byte[] tiles, int width, int height, int x, int y)
+    {
+        if (x < 1 || y < 1 || x >= width - 1 || y >= height - 1)
+            return;
+        tiles[y * width + x] = (byte)TileType.Floor;
+    }
+
+    private static void CarveCaveRect(byte[] tiles, int width, Room room)
+    {
+        for (int y = room.Y + 1; y < room.Y + room.Height - 1; y++)
+        {
+            for (int x = room.X + 1; x < room.X + room.Width - 1; x++)
+            {
+                if (x >= 1 && y >= 1 && x < width - 1)
+                    tiles[y * width + x] = (byte)TileType.Floor;
+            }
+        }
+    }
+
     private static void SplitNode(BspNode node, Random rng)
     {
         // Don't split if too small
@@ -559,5 +941,6 @@ public sealed class SpawnPoint
 public enum SpawnPointType
 {
     Room,
-    Street
+    Street,
+    Player
 }

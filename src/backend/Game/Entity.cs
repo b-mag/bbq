@@ -333,6 +333,12 @@ public sealed class Entity
     /// <summary>For projectiles: damage dealt on hit.</summary>
     public int Damage { get; set; }
 
+    /// <summary>Flat reduction to ability stamina costs from equipment.</summary>
+    public float StaminaCostReduction { get; set; }
+
+    /// <summary>Bonus heal amount from equipment (trinkets).</summary>
+    public int BonusHealAmount { get; set; }
+
     /// <summary>For projectiles: maximum travel distance in tiles before despawning.</summary>
     public float Range { get; set; }
 

@@ -37,6 +37,32 @@ public sealed class TaskAssignmentManager
     }
 
     /// <summary>
+    /// Assign a task using fitness score among candidates (sticky until reassigned).
+    /// Falls back to lowest PeerId when scores tie.
+    /// </summary>
+    public TaskAssignment AssignTaskByFitness(
+        string taskId,
+        string taskType,
+        IEnumerable<(string PeerId, PeerFitnessScore Score)> candidates,
+        long currentTick)
+    {
+        var best = candidates
+            .OrderByDescending(c => c.Score.CalculateScore())
+            .ThenBy(c => c.PeerId, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+        var assignedPeerId = best.PeerId ?? _localIdentity.PeerId;
+        var assignment = new TaskAssignment(taskId, taskType, assignedPeerId, currentTick);
+
+        lock (_lock)
+        {
+            _assignments[taskId] = assignment;
+        }
+
+        return assignment;
+    }
+
+    /// <summary>
     /// Assign a task to the lowest peer ID (deterministic, no negotiation).
     /// </summary>
     public TaskAssignment AssignTask(string taskId, string taskType, IEnumerable<string> candidatePeerIds, long currentTick)

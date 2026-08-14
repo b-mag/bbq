@@ -43,6 +43,9 @@ public static class ProgressionSystem
     /// <summary>XP awarded for killing a Gronk.</summary>
     public const int GronkKillXP = 25;
 
+    /// <summary>Party bonus when 2+ eligible members share a kill (Diablo-style).</summary>
+    public const float PartyXpBonus = 0.10f;
+
     /// <summary>Max stamina gained per level.</summary>
     private const float StaminaPerLevel = 10f;
 
@@ -125,8 +128,21 @@ public static class ProgressionSystem
         return enemySubType switch
         {
             "gronk" => GronkKillXP,
+            _ when enemySubType.StartsWith("elite_", StringComparison.OrdinalIgnoreCase) => GronkKillXP * 5,
             _ => 10, // Default for unknown enemies
         };
+    }
+
+    /// <summary>
+    /// Compute XP awarded to each eligible peer for a kill.
+    /// Full base XP to each eligible member; +PartyXpBonus when 2+ eligible (Diablo-style).
+    /// </summary>
+    public static int ComputeSharedKillXp(string enemySubType, int eligibleCount)
+    {
+        var baseXp = GetKillXP(enemySubType);
+        if (eligibleCount >= 2)
+            return (int)Math.Round(baseXp * (1f + PartyXpBonus));
+        return baseXp;
     }
 
     /// <summary>
@@ -138,5 +154,23 @@ public static class ProgressionSystem
         int hp = 100 + (level - 1) * HPPerLevel;
         float regen = 40f + (level - 1) * RegenPerLevel;
         return (stamina, hp, regen);
+    }
+
+    /// <summary>
+    /// Apply absolute level/XP and recompute derived max stats from level 1 baseline.
+    /// Used when loading a save.
+    /// </summary>
+    public static void ApplyLoadedProgression(Entity player, int level, int xp)
+    {
+        level = Math.Clamp(level, 1, MaxLevel);
+        player.Level = level;
+        player.XP = xp;
+        var (maxStamina, maxHp, regen) = GetStatsForLevel(level);
+        player.MaxStamina = maxStamina;
+        player.MaxHealth = maxHp;
+        player.StaminaRegenRate = regen;
+        player.Health = maxHp;
+        player.Stamina = maxStamina;
+        player.IsDirty = true;
     }
 }

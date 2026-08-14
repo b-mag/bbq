@@ -4,10 +4,10 @@
  * =============================================================================
  *
  * Manages a stack of open UI panels. ESC key always closes the topmost panel.
- * When no panels are open, ESC shows the quit/disconnect menu.
+ * When no panels are open, ESC shows the pause menu.
  *
  * PANEL PRIORITY (topmost closes first):
- *   quit-menu > inventory > ability-select > admin-message > chat
+ *   pause-menu > settings > inventory > ability-select > flame-offering > admin-message > chat
  *
  * WHY A STACK:
  * Multiple panels can be open simultaneously (e.g., chat + admin message).
@@ -18,11 +18,11 @@
  *   - Components call pushPanel() when they open
  *   - Components call popPanel() when they close (or ESC triggers it)
  *   - OverworldView listens for ESC and calls handleEscape()
- *   - handleEscape() returns which panel was closed (or 'quit-menu' if opened)
+ *   - handleEscape() returns which panel was closed (or 'pause-menu' if opened)
  * =============================================================================
  */
 
-export type PanelId = 'chat' | 'admin-message' | 'inventory' | 'ability-select' | 'quit-menu' | 'inspect';
+export type PanelId = 'chat' | 'admin-message' | 'inventory' | 'ability-select' | 'pause-menu' | 'settings' | 'flame-offering' | 'inspect';
 
 /** Simple panel stack — last in, first out. */
 let panelStack: PanelId[] = [];
@@ -78,14 +78,14 @@ export function clearStack(): void {
 /**
  * Handle ESC key press. Returns the action taken.
  * - If panels are open: closes the topmost panel, returns its ID
- * - If no panels open: opens quit-menu, returns 'quit-menu'
+ * - If no panels open: opens pause-menu, returns 'pause-menu'
  */
 export function handleEscape(): PanelId {
   if (panelStack.length > 0) {
     return popPanel()!;
   } else {
-    pushPanel('quit-menu');
-    return 'quit-menu';
+    pushPanel('pause-menu');
+    return 'pause-menu';
   }
 }
 

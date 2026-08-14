@@ -245,10 +245,65 @@ public static class AbilityRegistry
             Type = AbilityType.Mobility,
             StaminaCost = 28f,
             Damage = 0,
-            Range = 3f,                    // Dash distance in tiles
-            CooldownTicks = 40,            // 2 seconds — available often but costs stamina
-            DurationTicks = 10,            // 0.5 seconds of i-frames during dash
+            Range = 3f,
+            CooldownTicks = 40,
+            DurationTicks = 10,
             Description = "Dissolve into shadow and reappear nearby. Brief invincibility during the step.",
+        },
+
+        ["bone_cleaver"] = new AbilityDefinition
+        {
+            Id = "bone_cleaver",
+            Name = "Bone Cleaver",
+            Slot = AbilitySlot.Primary,
+            Type = AbilityType.Melee,
+            StaminaCost = 28f,
+            Damage = 20,
+            Range = 2.0f,
+            CooldownTicks = 14,
+            Description = "A heavy bone-edged cleave. Slow, brutal, and made for tanking through packs.",
+        },
+
+        ["hex_dart"] = new AbilityDefinition
+        {
+            Id = "hex_dart",
+            Name = "Hex Dart",
+            Slot = AbilitySlot.Primary,
+            Type = AbilityType.RangedSingle,
+            StaminaCost = 18f,
+            Damage = 10,
+            Range = 12f,
+            CooldownTicks = 10,
+            ProjectileSpeed = 0.55f,
+            Description = "A cursed dart that chips away at foes. Lower burst, steady pressure.",
+        },
+
+        ["grim_howl"] = new AbilityDefinition
+        {
+            Id = "grim_howl",
+            Name = "Grim Howl",
+            Slot = AbilitySlot.Secondary,
+            Type = AbilityType.HealAoE,
+            StaminaCost = 30f,
+            Damage = 0,
+            Range = 4f,
+            HealAmount = 8,
+            CooldownTicks = 40,
+            Description = "A sustaining howl that knits allies' wounds. Modest heal, strong for group play.",
+        },
+
+        ["cinder_ward"] = new AbilityDefinition
+        {
+            Id = "cinder_ward",
+            Name = "Cinder Ward",
+            Slot = AbilitySlot.Secondary,
+            Type = AbilityType.Shield,
+            StaminaCost = 32f,
+            Damage = 0,
+            ShieldAmount = 20,
+            DurationTicks = 50,
+            CooldownTicks = 50,
+            Description = "Wrap yourself in smoldering wards. Absorbs hits; sparks linger on the veil.",
         },
     };
 

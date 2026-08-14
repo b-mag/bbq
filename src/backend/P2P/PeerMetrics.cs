@@ -34,8 +34,26 @@ public readonly struct PeerFitnessScore
     public int CpuUsage { get; init; }
     public float BandwidthUtilization { get; init; }
     public TimeSpan Uptime { get; init; }
+    public int DisconnectCount { get; init; }
 
-    public float CalculateScore() => throw new NotImplementedException("Phase 2");
+    /// <summary>
+    /// Higher is better. Tie-break by PeerId is the caller's responsibility.
+    /// disconnectPenalty = clamp(DisconnectCount / 10, 0, 1).
+    /// </summary>
+    public float CalculateScore()
+    {
+        var cpu = Math.Clamp(CpuUsage / 100f, 0f, 1f);
+        var bandwidthUtil = Math.Clamp(BandwidthUtilization, 0f, 1f);
+        var latencyScore = Math.Clamp(1f - LatencyMs / 500f, 0f, 1f);
+        var uptimeScore = Math.Clamp((float)Uptime.TotalHours / 24f, 0f, 1f);
+        var disconnectPenalty = Math.Clamp(DisconnectCount / 10f, 0f, 1f);
+
+        return 0.30f * (1f - cpu)
+             + 0.30f * (1f - bandwidthUtil)
+             + 0.20f * latencyScore
+             + 0.15f * uptimeScore
+             - 0.05f * disconnectPenalty;
+    }
 }
 
 /// <summary>
@@ -50,6 +68,7 @@ public static class MetricsCalculator
         CpuUsage = metrics.CpuUsagePercent,
         BandwidthUtilization = Math.Max(metrics.CurrentUploadUtilization, metrics.CurrentDownloadUtilization),
         Uptime = metrics.Uptime,
+        DisconnectCount = metrics.DisconnectCount,
     };
 }
 

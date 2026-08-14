@@ -47,6 +47,11 @@ namespace Carcosa.Server.P2P;
 [JsonSerializable(typeof(PeerLootPickupPayload))]
 [JsonSerializable(typeof(PeerLootFairGamePayload))]
 [JsonSerializable(typeof(PeerMetricsUpdatePayload))]
+[JsonSerializable(typeof(PeerXpAwardPayload))]
+[JsonSerializable(typeof(PeerDungeonStartPayload))]
+[JsonSerializable(typeof(PeerDungeonStatePayload))]
+[JsonSerializable(typeof(PeerDungeonCompletePayload))]
+[JsonSerializable(typeof(PeerDungeonInputPayload))]
 [JsonSerializable(typeof(string[]))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,

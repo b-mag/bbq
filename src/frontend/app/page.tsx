@@ -21,6 +21,7 @@ type AppState = 'connect' | 'overworld' | 'dungeon';
 export default function Home() {
   const [appState, setAppState] = useState<AppState>('connect');
   const [playerName, setPlayerName] = useState('');
+  const [bootstrapping, setBootstrapping] = useState(true);
 
   // Dungeon state (used when in 'dungeon' mode)
   const [dungeonInfo, setDungeonInfo] = useState<{ hostAddress: string; seed: number; scenario: string } | null>(null);
@@ -186,9 +187,37 @@ export default function Home() {
     }
   }, [appState, ws.status, gameMap]);
 
+  // First-run name gate: skip connect screen if the save already has a name
+  useEffect(() => {
+    const bootstrap = async () => {
+      try {
+        const res = await fetch('/api/gameplay/bootstrap');
+        if (res.ok) {
+          const data = await res.json();
+          if (!data.needsName && data.displayName) {
+            setPlayerName(data.displayName);
+            setAppState('overworld');
+          }
+        }
+      } catch {
+        // Show connect screen if bootstrap fails
+      } finally {
+        setBootstrapping(false);
+      }
+    };
+    bootstrap();
+  }, []);
+
   // Enter overworld from connect screen
-  const handleEnterOverworld = () => {
+  const handleEnterOverworld = async () => {
     if (!playerName.trim()) return;
+    try {
+      await fetch('/api/p2p/name', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: playerName.trim() }),
+      });
+    } catch { /* proceed even if name POST fails */ }
     setAppState('overworld');
   };
 
@@ -232,6 +261,25 @@ export default function Home() {
   };
 
   // --- RENDER ---
+
+  if (bootstrapping) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        height: '100vh',
+        background: 'radial-gradient(ellipse at center, #2a2218 0%, #1a1410 70%, #0d0a07 100%)',
+        color: '#c9a84c', fontFamily: 'Georgia, serif',
+      }}>
+        <h1 style={{
+          fontSize: '2rem', letterSpacing: '0.3em',
+          textShadow: '0 0 20px rgba(201, 168, 76, 0.3)',
+        }}>
+          CARCOSA
+        </h1>
+        <p style={{ color: '#6a5d4a', marginTop: 8, fontStyle: 'italic' }}>Stirring...</p>
+      </div>
+    );
+  }
 
   // Overworld state
   if (appState === 'overworld') {

@@ -5,7 +5,7 @@
  *
  * Displays the shared stamina bar that gates all abilities and sprinting.
  * Green when healthy, flashes red border when depleted (helpless state).
- * Positioned directly below the HP bar for the classic RPG look.
+ * Positioned at top: 50 (below HP). XP bar sits under this cluster at ~68.
  *
  * VISUAL DESIGN:
  *   - Green fill = available stamina

@@ -21,9 +21,10 @@ interface P2POverlayProps {
   shard: ShardInfo | null;
   glyph: string;
   onGlyphConnect: (code: string) => Promise<boolean>;
+  showGlyphOverlay?: boolean;
 }
 
-export default function P2POverlay({ status, shard, glyph, onGlyphConnect }: P2POverlayProps) {
+export default function P2POverlay({ status, shard, glyph, onGlyphConnect, showGlyphOverlay = true }: P2POverlayProps) {
   const [glyphInput, setGlyphInput] = useState('');
   const [glyphStatus, setGlyphStatus] = useState<'idle' | 'connecting' | 'success' | 'error'>('idle');
   const [showGlyphPanel, setShowGlyphPanel] = useState(false);
@@ -119,6 +120,7 @@ export default function P2POverlay({ status, shard, glyph, onGlyphConnect }: P2P
         )}
 
         {/* Glyph toggle button */}
+        {showGlyphOverlay && (
         <button onClick={() => setShowGlyphPanel(!showGlyphPanel)} style={{
           padding: '4px 10px', background: 'rgba(13, 15, 7, 0.85)',
           border: '1px solid #4a3d2e', borderRadius: 4,
@@ -126,10 +128,11 @@ export default function P2POverlay({ status, shard, glyph, onGlyphConnect }: P2P
         }}>
           {showGlyphPanel ? 'Hide Glyph' : 'Glyph'}
         </button>
+        )}
       </div>
 
       {/* Glyph panel (toggled) */}
-      {showGlyphPanel && (
+      {showGlyphOverlay && showGlyphPanel && (
         <div style={{
           position: 'absolute', top: 80, right: 12, width: 260,
           background: 'rgba(13, 15, 7, 0.95)', border: '1px solid #4a3d2e',

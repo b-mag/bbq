@@ -52,7 +52,17 @@ namespace Carcosa.Server.Gameplay;
 public sealed class PlayerSaveData
 {
     /// <summary>Save format version. Increment when adding breaking changes.</summary>
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = 2;
+
+    // --- Identity / first-run ---
+    public string DisplayName { get; set; } = "";
+    public bool HasCompletedFirstRun { get; set; }
+
+    // --- Settings ---
+    public bool OfflineMode { get; set; }
+    public float MasterVolume { get; set; } = 1f;
+    public bool ShowGlyphOverlay { get; set; } = true;
+    public bool ShowFps { get; set; }
 
     // --- Progression ---
     public int Level { get; set; } = 1;
@@ -62,6 +72,12 @@ public sealed class PlayerSaveData
     // --- Abilities ---
     public string PrimaryAbility { get; set; } = "ember_spray";
     public string SecondaryAbility { get; set; } = "iron_veil";
+    public List<string> UnlockedAbilityIds { get; set; } = new()
+    {
+        "ember_spray", "pale_blade", "void_bolt", "bone_cleaver", "hex_dart",
+        "warding_light", "iron_veil", "shadow_step", "grim_howl", "cinder_ward",
+    };
+    public List<string> UnlockedItemIds { get; set; } = new();
 
     // --- Equipment (slot → item ID, null = empty) ---
     public string? WeaponSlot { get; set; }
@@ -75,6 +91,10 @@ public sealed class PlayerSaveData
     // --- Position (last known overworld position for resume) ---
     public float LastX { get; set; } = 100.5f;
     public float LastY { get; set; } = 180.5f;
+    /// <summary>Safe overworld position to restore after dungeon logout.</summary>
+    public float LastSafeOverworldX { get; set; } = 100.5f;
+    public float LastSafeOverworldY { get; set; } = 180.5f;
+    public bool WasInDungeon { get; set; }
 
     // --- Timestamps ---
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -99,7 +119,7 @@ public sealed class SaveManager
     // =========================================================================
 
     /// <summary>Current save format version.</summary>
-    private const byte CurrentVersion = 1;
+    private const byte CurrentVersion = 2;
 
     /// <summary>
     /// Hardcoded salt for PBKDF2 key derivation. Combined with peer ID to

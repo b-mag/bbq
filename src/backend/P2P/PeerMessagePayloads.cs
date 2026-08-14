@@ -223,17 +223,44 @@ public sealed class PeerPartyUpdatePayload
     /// <summary>Party ID.</summary>
     public required string PartyId { get; init; }
 
-    /// <summary>Event type: "formed", "joined", "left", "disbanded", "leader_changed".</summary>
-    public required string Event { get; init; }
+    /// <summary>
+    /// Event/action: invite, accept, leave, sync, update, formed, joined, left, disbanded, leader_changed.
+    /// </summary>
+    public string Event { get; init; } = "sync";
+
+    /// <summary>Alias used by mesh party manager (same as Event).</summary>
+    public string Action
+    {
+        get => Event;
+        init => Event = value;
+    }
 
     /// <summary>Current party leader's peer ID.</summary>
     public required string LeaderId { get; init; }
 
+    public string LeaderPeerId
+    {
+        get => LeaderId;
+        init => LeaderId = value;
+    }
+
     /// <summary>All current member peer IDs.</summary>
     public required string[] MemberIds { get; init; }
 
-    /// <summary>Member display names (same order as MemberIds).</summary>
-    public required string[] MemberNames { get; init; }
+    public string[] MemberPeerIds
+    {
+        get => MemberIds;
+        init => MemberIds = value;
+    }
+
+    /// <summary>Member display names (same order as MemberIds). May be empty.</summary>
+    public string[] MemberNames { get; init; } = Array.Empty<string>();
+
+    /// <summary>Invite target or leave subject.</summary>
+    public string? TargetPeerId { get; init; }
+
+    /// <summary>Peer that sent this update.</summary>
+    public string? SenderPeerId { get; init; }
 }
 
 // =============================================================================
@@ -563,4 +590,59 @@ public sealed class PeerMetricsUpdatePayload
     public float CurrentUploadUtilization { get; set; }
     public float CurrentDownloadUtilization { get; set; }
     public long Timestamp { get; set; }
+}
+
+/// <summary>
+/// Host broadcasts XP awards for a kill. Eligible peers apply locally.
+/// Full base XP each + party bonus when EligiblePeerIds.Length >= 2.
+/// </summary>
+public sealed class PeerXpAwardPayload
+{
+    public required string EnemyId { get; init; }
+    public required string EnemySubType { get; init; }
+    public int XpAmount { get; set; }
+    public required string[] EligiblePeerIds { get; init; }
+    public long ServerTick { get; init; }
+}
+
+/// <summary>Mesh dungeon instance start — shared deterministic seed, no matchmaking.</summary>
+public sealed class PeerDungeonStartPayload
+{
+    public required string InstanceId { get; init; }
+    public required string HostPeerId { get; init; }
+    public required string Scenario { get; init; }
+    public int Seed { get; set; }
+    public int AvgLevel { get; set; }
+    public required string[] PartyMemberIds { get; init; }
+    public float EntranceX { get; set; }
+    public float EntranceY { get; set; }
+}
+
+/// <summary>Host → members dungeon entity snapshot (compact).</summary>
+public sealed class PeerDungeonStatePayload
+{
+    public required string InstanceId { get; init; }
+    public int Tick { get; set; }
+    public required PeerEnemySyncEntry[] Entities { get; init; }
+    public int Wave { get; set; }
+    public string Phase { get; set; } = "playing";
+}
+
+/// <summary>Dungeon ended — return to overworld.</summary>
+public sealed class PeerDungeonCompletePayload
+{
+    public required string InstanceId { get; init; }
+    public bool Victory { get; set; }
+    public int XpBonus { get; set; }
+}
+
+/// <summary>Member → host dungeon input (ability use / movement hint).</summary>
+public sealed class PeerDungeonInputPayload
+{
+    public required string InstanceId { get; init; }
+    public required string PeerId { get; init; }
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float AimAngle { get; set; }
+    public string? AbilitySlot { get; set; }
 }

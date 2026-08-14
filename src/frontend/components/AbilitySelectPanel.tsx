@@ -19,7 +19,7 @@ interface AbilitySelectPanelProps {
   onClose: () => void;
 }
 
-interface AbilityInfo {
+export interface AbilityInfo {
   id: string;
   name: string;
   type: string;
@@ -28,16 +28,20 @@ interface AbilityInfo {
   color: string;
 }
 
-const PRIMARY_ABILITIES: AbilityInfo[] = [
+export const PRIMARY_ABILITIES: AbilityInfo[] = [
   { id: 'ember_spray', name: 'Ember Spray', type: 'Ranged AoE', cost: 25, description: 'Short-range cone of burning embers. Fast but stamina-hungry.', color: '#c06020' },
   { id: 'pale_blade', name: 'Pale Blade', type: 'Melee', cost: 20, description: 'Swift melee slash. Low cost, high damage, close range.', color: '#d0d0e0' },
   { id: 'void_bolt', name: 'Void Bolt', type: 'Ranged', cost: 22, description: 'Long-range projectile. High damage, slow cooldown.', color: '#6040a0' },
+  { id: 'bone_cleaver', name: 'Bone Cleaver', type: 'Melee', cost: 28, description: 'Heavy cleave. Slow, brutal, built for packs.', color: '#a08060' },
+  { id: 'hex_dart', name: 'Hex Dart', type: 'Ranged', cost: 18, description: 'Cursed dart. Steady pressure over burst.', color: '#8050a0' },
 ];
 
-const SECONDARY_ABILITIES: AbilityInfo[] = [
+export const SECONDARY_ABILITIES: AbilityInfo[] = [
   { id: 'warding_light', name: 'Warding Light', type: 'Heal AoE', cost: 35, description: 'Heal all nearby allies. Costly but powerful.', color: '#c0a040' },
   { id: 'iron_veil', name: 'Iron Veil', type: 'Shield', cost: 30, description: 'Temporary damage shield. Brief but strong.', color: '#4070a0' },
   { id: 'shadow_step', name: 'Shadow Step', type: 'Mobility', cost: 28, description: 'Short dash with invincibility frames.', color: '#303040' },
+  { id: 'grim_howl', name: 'Grim Howl', type: 'Heal AoE', cost: 30, description: 'Modest group heal. Strong for party sustain.', color: '#906040' },
+  { id: 'cinder_ward', name: 'Cinder Ward', type: 'Shield', cost: 32, description: 'Smoldering ward that absorbs hits.', color: '#c05020' },
 ];
 
 export default function AbilitySelectPanel({ currentPrimary, currentSecondary, onConfirm, onClose }: AbilitySelectPanelProps) {
@@ -70,7 +74,7 @@ export default function AbilitySelectPanel({ currentPrimary, currentSecondary, o
           Meditation Altar
         </h3>
         <p style={{ color: '#4a6a6a', fontSize: '0.7rem', textAlign: 'center', margin: '0 0 16px 0' }}>
-          Choose your abilities. You may only change at another altar.
+          Choose your abilities anytime in the overworld (Inventory). Locked in dungeons.
         </p>
 
         <div style={{ display: 'flex', gap: 20 }}>

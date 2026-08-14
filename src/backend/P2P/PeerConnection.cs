@@ -95,6 +95,15 @@ public sealed class PeerConnection : IDisposable
     /// <summary>Round-trip time in milliseconds (from keepalive).</summary>
     public int LatencyMs { get; private set; }
 
+    /// <summary>Total bytes sent on this connection.</summary>
+    public long BytesSent => Interlocked.Read(ref _bytesSent);
+
+    /// <summary>Total bytes received on this connection.</summary>
+    public long BytesReceived => Interlocked.Read(ref _bytesReceived);
+
+    private long _bytesSent;
+    private long _bytesReceived;
+
     // =========================================================================
     // EVENTS
     // =========================================================================
@@ -185,6 +194,7 @@ public sealed class PeerConnection : IDisposable
             if (result.MessageType == WebSocketMessageType.Text)
             {
                 LastMessageAt = DateTime.UtcNow;
+                Interlocked.Add(ref _bytesReceived, result.Count);
                 var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
                 return JsonSerializer.Deserialize(json, PeerJsonContext.Default.PeerMessage);
             }
@@ -218,6 +228,7 @@ public sealed class PeerConnection : IDisposable
                     WebSocketMessageType.Text,
                     endOfMessage: true,
                     _cts?.Token ?? CancellationToken.None);
+                Interlocked.Add(ref _bytesSent, bytes.Length);
                 return true;
             }
             finally
@@ -259,6 +270,7 @@ public sealed class PeerConnection : IDisposable
                 if (result.MessageType == WebSocketMessageType.Text)
                 {
                     LastMessageAt = DateTime.UtcNow;
+                    Interlocked.Add(ref _bytesReceived, result.Count);
                     var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
                     var message = JsonSerializer.Deserialize(json, PeerJsonContext.Default.PeerMessage);
 

@@ -55,12 +55,17 @@ public sealed class OverworldCombatSync
     private readonly PeerMesh _mesh;
     private readonly PeerIdentity _localIdentity;
     private readonly ShardHostManager _hostManager;
+    private readonly TaskAssignmentManager _taskAssignmentManager;
     private readonly EnemySpawner _spawner;
     private readonly OverworldSync _overworldSync;
     private readonly LootDropManager _lootDropManager;
     private readonly PlayerInventory _inventory;
+    private readonly MetricsCollector _metricsCollector;
     private readonly CancellationTokenSource _cts = new();
     private Task? _tickLoop;
+
+    // Track all peers who damaged an enemy (for elite personal drops)
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _enemyAttackers = new();
 
     // Local player entity (this peer's player — always tracked locally)
     private readonly Entity _localPlayer;
@@ -86,18 +91,22 @@ public sealed class OverworldCombatSync
         PeerMesh mesh,
         PeerIdentity localIdentity,
         ShardHostManager hostManager,
+        TaskAssignmentManager taskAssignmentManager,
         EnemySpawner spawner,
         OverworldSync overworldSync,
         LootDropManager lootDropManager,
-        PlayerInventory inventory)
+        PlayerInventory inventory,
+        MetricsCollector metricsCollector)
     {
         _mesh = mesh;
         _localIdentity = localIdentity;
         _hostManager = hostManager;
+        _taskAssignmentManager = taskAssignmentManager;
         _spawner = spawner;
         _overworldSync = overworldSync;
         _lootDropManager = lootDropManager;
         _inventory = inventory;
+        _metricsCollector = metricsCollector;
 
         // Initialize local player entity with defaults
         _localPlayer = new Entity
@@ -138,6 +147,9 @@ public sealed class OverworldCombatSync
     /// <summary>Whether this peer is the shard host.</summary>
     public bool IsHost => _hostManager.IsLocalHost;
 
+    /// <summary>Current server tick (20Hz combat loop).</summary>
+    public int CurrentServerTick => _tickCount;
+
     // =========================================================================
     // LIFECYCLE
     // =========================================================================
@@ -174,6 +186,12 @@ public sealed class OverworldCombatSync
 
     private void OnHostStatusChanged(bool isHost)
     {
+        _taskAssignmentManager.AssignTask(
+            "shard_host",
+            TaskTypes.ShardHost,
+            _taskAssignmentManager.GetAllPeerIds(),
+            _tickCount);
+
         if (isHost)
         {
             _spawner.Activate();
@@ -227,8 +245,16 @@ public sealed class OverworldCombatSync
                 // Auto-pickup loot when walking over it (within 1.2 tiles)
                 CheckAutoPickupLoot();
 
-                // Process loot despawn timers
-                _lootDropManager.ProcessTick();
+                // Process loot eligibility expansion and expiration
+                var lootTickResult = _lootDropManager.ProcessTick(_tickCount);
+                foreach (var dropId in lootTickResult.FairGameDropIds)
+                    _ = BroadcastLootFairGameAsync(dropId);
+                if (lootTickResult.ExpiredDropIds.Count > 0)
+                    _ = BroadcastActiveLootDropsAsync();
+
+                // Broadcast metrics every 10 seconds (200 ticks at 20Hz)
+                if (_tickCount % 200 == 0)
+                    _ = ReportMetricsAsync();
 
                 // Host-only: process enemy AI, projectiles, and broadcast state
                 if (_hostManager.IsLocalHost)
@@ -313,15 +339,12 @@ public sealed class OverworldCombatSync
                     // Apply damage
                     bool killed = enemy.TakeDamage(proj.Damage);
 
+                    var attackerPeerId = ExtractPeerId(proj.SourceEntityId);
+                    TrackEnemyAttacker(enemy.Id, attackerPeerId);
+
                     // Set tag (RuneScape-style: first hit tags the enemy)
-                    if (enemy.TaggedBy == null && proj.SourceEntityId != null)
-                    {
-                        // Extract peer ID from source entity ID (format: "player_{peerId}")
-                        var peerId = proj.SourceEntityId.StartsWith("player_")
-                            ? proj.SourceEntityId["player_".Length..]
-                            : proj.SourceEntityId;
-                        enemy.TaggedBy = peerId;
-                    }
+                    if (enemy.TaggedBy == null && attackerPeerId != null)
+                        enemy.TaggedBy = attackerPeerId;
 
                     // Notify enemy AI of attack
                     if (proj.SourceEntityId != null)
@@ -331,14 +354,14 @@ public sealed class OverworldCombatSync
 
                     // Broadcast damage event
                     _ = BroadcastDamageEventAsync(
-                        proj.SourceEntityId ?? _localIdentity.PeerId,
+                        attackerPeerId ?? _localIdentity.PeerId,
                         enemy.Id, proj.Damage, enemy.Health, killed, enemy.X, enemy.Y);
 
                     // Notify spawner of death
                     if (killed)
                     {
                         _spawner.NotifyEnemyDeath(enemy.Id);
-                        GenerateLootForKill(enemy, proj.SourceEntityId);
+                        _ = HandleEnemyKillAsync(enemy, attackerPeerId);
                     }
 
                     // Remove projectile on hit
@@ -538,11 +561,11 @@ public sealed class OverworldCombatSync
             {
                 bool killed = enemy.TakeDamage(ability.Damage);
 
+                TrackEnemyAttacker(enemy.Id, peerId);
+
                 // Tag enemy
                 if (enemy.TaggedBy == null)
-                {
                     enemy.TaggedBy = peerId;
-                }
 
                 // Aggro
                 EnemyAI.NotifyAttacked(enemy, source.Id);
@@ -553,7 +576,7 @@ public sealed class OverworldCombatSync
                 if (killed)
                 {
                     _spawner.NotifyEnemyDeath(enemy.Id);
-                    GenerateLootForKill(enemy, source.Id);
+                    _ = HandleEnemyKillAsync(enemy, peerId);
                 }
 
                 break; // Single target melee
@@ -579,6 +602,26 @@ public sealed class OverworldCombatSync
 
             case PeerMessageTypes.DamageEvent when message.DamageEvent != null:
                 HandleDamageEvent(message.DamageEvent);
+                break;
+
+            case PeerMessageTypes.LootDropSync when message.LootDropSync != null:
+                HandleLootDropSync(message.LootDropSync);
+                break;
+
+            case PeerMessageTypes.LootPickup when message.LootPickup != null:
+                HandleLootPickup(message.LootPickup);
+                break;
+
+            case PeerMessageTypes.EliteDefeated when message.EliteDefeated != null:
+                HandleEliteDefeated(message.EliteDefeated);
+                break;
+
+            case PeerMessageTypes.LootFairGame when message.LootFairGame != null:
+                HandleLootFairGame(message.LootFairGame);
+                break;
+
+            case PeerMessageTypes.MetricsUpdate when message.MetricsUpdate != null:
+                _metricsCollector.StoreRemoteMetrics(message.MetricsUpdate);
                 break;
         }
     }
@@ -802,23 +845,260 @@ public sealed class OverworldCombatSync
     // =========================================================================
 
     /// <summary>
-    /// Generate loot drops when an enemy is killed. Uses LootSystem to roll drops
-    /// and adds them to LootDropManager for ground display and auto-pickup.
+    /// Pick up loot with autonomous P2P broadcast (any peer, not just host).
     /// </summary>
-    private void GenerateLootForKill(Entity enemy, string? killerEntityId)
+    public async Task<GroundLootDrop?> TryPickUpLootAsync(string dropId, string peerId)
     {
-        // Determine eligibility (who can loot) based on the enemy's tag
-        var eligible = LootSystem.DetermineEligibility(enemy.TaggedBy, null);
+        var drop = _lootDropManager.TryPickUp(dropId, peerId, _tickCount);
+        if (drop == null)
+            return null;
 
-        // Generate drops from loot table
-        var drops = LootSystem.GenerateDrops(enemy.SubType, enemy.X, enemy.Y, eligible);
+        await BroadcastLootPickupAsync(dropId, peerId);
+        return drop;
+    }
 
-        // Add to ground loot manager
+    private async Task HandleEnemyKillAsync(Entity enemy, string? killerPeerId)
+    {
+        _enemyAttackers.TryRemove(enemy.Id, out var attackers);
+
+        if (IsEliteEnemy(enemy))
+        {
+            var attackerIds = attackers?.Keys.ToArray()
+                ?? (killerPeerId != null ? new[] { killerPeerId } : Array.Empty<string>());
+
+            await BroadcastEliteDefeatedAsync(enemy, attackerIds);
+            GenerateEliteDropForLocalPeer(enemy, attackerIds);
+            return;
+        }
+
+        if (!_hostManager.IsLocalHost)
+            return;
+
+        GenerateNormalLootForKill(enemy, killerPeerId);
+        var newDrops = _lootDropManager.ActiveDrops
+            .Where(d => d.CreatedAtServerTick == _tickCount)
+            .ToList();
+        await BroadcastLootDropsAsync(newDrops);
+    }
+
+    private void GenerateNormalLootForKill(Entity enemy, string? killerPeerId)
+    {
+        var partyMembers = GetPartyMembersForPeer(killerPeerId ?? enemy.TaggedBy);
+        var eligible = LootSystem.DetermineEligibility(enemy.TaggedBy, partyMembers);
+        var mode = DetermineLootMode(eligible, partyMembers);
+
+        var drops = LootSystem.GenerateDrops(
+            enemy.SubType, enemy.X, enemy.Y, eligible, _tickCount, mode);
+
         foreach (var drop in drops)
         {
             _lootDropManager.AddDrop(drop);
-            Console.WriteLine($"[Loot] Dropped: {drop.ItemId} x{drop.Quantity} at ({drop.X:F1}, {drop.Y:F1}) for {(eligible.Count > 0 ? string.Join(",", eligible) : "anyone")}");
+            Console.WriteLine($"[Loot] Dropped: {drop.ItemId} x{drop.Quantity} at ({drop.X:F1}, {drop.Y:F1}) mode={mode}");
         }
+    }
+
+    private void GenerateEliteDropForLocalPeer(Entity enemy, string[] attackerPeerIds)
+    {
+        if (!attackerPeerIds.Contains(_localIdentity.PeerId))
+            return;
+
+        var seed = DeterministicLootGenerator.ComputeEliteLootSeed(
+            enemy.Id,
+            _localIdentity.PeerId,
+            _tickCount,
+            _localIdentity.WorldId);
+
+        var eligible = new HashSet<string> { _localIdentity.PeerId };
+        var drop = DeterministicLootGenerator.GenerateDropWithSeed(
+            enemy.SubType,
+            enemy.X,
+            enemy.Y,
+            seed,
+            eligible,
+            LootDropMode.ElitePersonal,
+            _tickCount);
+
+        if (drop == null)
+            return;
+
+        _lootDropManager.AddDrop(drop);
+        Console.WriteLine($"[Loot] Elite personal drop: {drop.ItemId} x{drop.Quantity} seed={seed[..12]}...");
+    }
+
+    private static LootDropMode DetermineLootMode(HashSet<string> eligible, IEnumerable<string>? partyMembers)
+    {
+        var partyList = partyMembers?.ToList();
+        if (partyList is { Count: > 1 })
+            return LootDropMode.PartyAnyOne;
+
+        return eligible.Count <= 1 ? LootDropMode.Solo : LootDropMode.PartyAnyOne;
+    }
+
+    private static bool IsEliteEnemy(Entity enemy)
+        => enemy.SubType.StartsWith("elite_", StringComparison.OrdinalIgnoreCase);
+
+    private void TrackEnemyAttacker(string enemyId, string? peerId)
+    {
+        if (string.IsNullOrEmpty(peerId))
+            return;
+
+        var attackers = _enemyAttackers.GetOrAdd(
+            enemyId,
+            _ => new ConcurrentDictionary<string, byte>(StringComparer.Ordinal));
+        attackers.TryAdd(peerId, 0);
+    }
+
+    private IEnumerable<string>? GetPartyMembersForPeer(string? peerId)
+    {
+        // Party sync integration placeholder — solo until party loot wiring is complete.
+        return null;
+    }
+
+    // =========================================================================
+    // LOOT P2P HANDLERS
+    // =========================================================================
+
+    private void HandleLootDropSync(PeerLootDropSyncPayload sync)
+    {
+        foreach (var entry in sync.Drops)
+        {
+            if (entry.IsCollected)
+            {
+                _lootDropManager.ApplyRemotePickup(
+                    entry.DropId, entry.CollectedByPeerId ?? "", entry.CollectedAtTick);
+                continue;
+            }
+
+            _lootDropManager.SyncDrop(entry, _tickCount, sync.SenderTick);
+        }
+    }
+
+    private void HandleLootPickup(PeerLootPickupPayload pickup)
+    {
+        if (pickup.PickedUpByPeerId == _localIdentity.PeerId)
+            return;
+
+        _lootDropManager.ApplyRemotePickup(pickup.DropId, pickup.PickedUpByPeerId, pickup.ServerTick);
+    }
+
+    private void HandleEliteDefeated(PeerEliteDefeatedPayload elite)
+    {
+        if (!elite.AttackerPeerIds.Contains(_localIdentity.PeerId))
+            return;
+
+        var seed = DeterministicLootGenerator.ComputeEliteLootSeed(
+            elite.EliteId,
+            _localIdentity.PeerId,
+            elite.ServerTickWhenDefeated,
+            _localIdentity.WorldId);
+
+        var eligible = new HashSet<string> { _localIdentity.PeerId };
+        var drop = DeterministicLootGenerator.GenerateDropWithSeed(
+            elite.EliteSubType,
+            elite.X,
+            elite.Y,
+            seed,
+            eligible,
+            LootDropMode.ElitePersonal,
+            _tickCount);
+
+        if (drop == null)
+            return;
+
+        _lootDropManager.AddDrop(drop);
+    }
+
+    private void HandleLootFairGame(PeerLootFairGamePayload fairGame)
+    {
+        _lootDropManager.ApplyFairGame(fairGame.DropId);
+    }
+
+    // =========================================================================
+    // LOOT P2P BROADCASTING
+    // =========================================================================
+
+    private async Task BroadcastActiveLootDropsAsync()
+    {
+        var entries = _lootDropManager.ActiveDrops
+            .Where(d => !d.IsCollected)
+            .Select(LootDropManager.ToSyncEntry)
+            .ToArray();
+
+        if (entries.Length == 0)
+            return;
+
+        await _mesh.BroadcastAsync(new PeerMessage
+        {
+            Type = PeerMessageTypes.LootDropSync,
+            LootDropSync = new PeerLootDropSyncPayload { Drops = entries, SenderTick = _tickCount },
+        });
+    }
+
+    private async Task BroadcastLootDropsAsync(IEnumerable<GroundLootDrop> drops)
+    {
+        var entries = drops.Select(LootDropManager.ToSyncEntry).ToArray();
+        if (entries.Length == 0)
+            return;
+
+        await _mesh.BroadcastAsync(new PeerMessage
+        {
+            Type = PeerMessageTypes.LootDropSync,
+            LootDropSync = new PeerLootDropSyncPayload { Drops = entries, SenderTick = _tickCount },
+        });
+    }
+
+    private async Task BroadcastLootPickupAsync(string dropId, string pickedUpByPeerId)
+    {
+        await _mesh.BroadcastAsync(new PeerMessage
+        {
+            Type = PeerMessageTypes.LootPickup,
+            LootPickup = new PeerLootPickupPayload
+            {
+                DropId = dropId,
+                PickedUpByPeerId = pickedUpByPeerId,
+                ServerTick = _tickCount,
+            },
+        });
+    }
+
+    private async Task BroadcastLootFairGameAsync(string dropId)
+    {
+        await _mesh.BroadcastAsync(new PeerMessage
+        {
+            Type = PeerMessageTypes.LootFairGame,
+            LootFairGame = new PeerLootFairGamePayload
+            {
+                DropId = dropId,
+                ServerTick = _tickCount,
+            },
+        });
+    }
+
+    private async Task BroadcastEliteDefeatedAsync(Entity enemy, string[] attackerPeerIds)
+    {
+        await _mesh.BroadcastAsync(new PeerMessage
+        {
+            Type = PeerMessageTypes.EliteDefeated,
+            EliteDefeated = new PeerEliteDefeatedPayload
+            {
+                EliteId = enemy.Id,
+                EliteSubType = enemy.SubType,
+                X = enemy.X,
+                Y = enemy.Y,
+                ServerTickWhenDefeated = _tickCount,
+                AttackerPeerIds = attackerPeerIds,
+            },
+        });
+    }
+
+    private async Task ReportMetricsAsync()
+    {
+        var payload = _metricsCollector.CreateUpdatePayload();
+        await _mesh.BroadcastAsync(new PeerMessage
+        {
+            Type = PeerMessageTypes.MetricsUpdate,
+            MetricsUpdate = payload,
+        });
     }
 
     // =========================================================================
@@ -838,7 +1118,7 @@ public sealed class OverworldCombatSync
         const float pickupRadius = 1.2f;
         const float pickupRadiusSq = pickupRadius * pickupRadius;
 
-        var nearbyDrops = _lootDropManager.GetDropsForPeer(_localIdentity.PeerId);
+        var nearbyDrops = _lootDropManager.GetDropsForPeer(_localIdentity.PeerId, _tickCount);
         foreach (var drop in nearbyDrops)
         {
             float dx = drop.X - _localPlayer.X;
@@ -847,12 +1127,14 @@ public sealed class OverworldCombatSync
 
             if (distSq <= pickupRadiusSq)
             {
-                // Try to pick up — adds to inventory if space available
-                var picked = _lootDropManager.TryPickUp(drop.DropId, _localIdentity.PeerId);
+                var picked = _lootDropManager.TryPickUp(drop.DropId, _localIdentity.PeerId, _tickCount);
                 if (picked != null)
                 {
-                    _inventory.AddItem(picked.ItemId, picked.Quantity);
-                    Console.WriteLine($"[Loot] Auto-picked up: {picked.ItemId} x{picked.Quantity}");
+                    if (_inventory.AddItem(picked.ItemId, picked.Quantity))
+                    {
+                        _ = BroadcastLootPickupAsync(picked.DropId, _localIdentity.PeerId);
+                        Console.WriteLine($"[Loot] Auto-picked up: {picked.ItemId} x{picked.Quantity}");
+                    }
                 }
             }
         }
@@ -872,6 +1154,16 @@ public sealed class OverworldCombatSync
         if (_spawner.GetEnemy(id) is { } enemy) return enemy;
         if (_projectiles.TryGetValue(id, out var proj)) return proj;
         return null;
+    }
+
+    private static string? ExtractPeerId(string? entityId)
+    {
+        if (string.IsNullOrEmpty(entityId))
+            return null;
+
+        return entityId.StartsWith("player_", StringComparison.Ordinal)
+            ? entityId["player_".Length..]
+            : entityId;
     }
 
     /// <summary>

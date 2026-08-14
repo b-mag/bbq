@@ -87,7 +87,11 @@ public static class PeerHandshake
                 GameVersionPatch = localIdentity.GameVersionPatch,
                 WorldId = localIdentity.WorldId,
                 PublicAddress = localIdentity.PublicAddress,
-                Capabilities = new[] { "chat", "party", "dungeon", "pex" },
+                Capabilities = new[] { "chat", "party", "dungeon", "pex", "loot_sync", "metrics" },
+                AvailableCpuPercent = 50,
+                AvailableMemoryMb = 2048,
+                UploadBandwidthMbps = 50,
+                DownloadBandwidthMbps = 100,
             }
         };
     }

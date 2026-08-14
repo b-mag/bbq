@@ -53,6 +53,18 @@ public sealed class PeerHandshakePayload
 
     /// <summary>Capabilities/features this peer supports (for future extensions).</summary>
     public string[] Capabilities { get; set; } = Array.Empty<string>();
+
+    /// <summary>Advertised available CPU headroom at connect time (percent).</summary>
+    public int AvailableCpuPercent { get; set; }
+
+    /// <summary>Advertised available memory at connect time (MB).</summary>
+    public long AvailableMemoryMb { get; set; }
+
+    /// <summary>Advertised upload bandwidth capacity (Mbps).</summary>
+    public float UploadBandwidthMbps { get; set; }
+
+    /// <summary>Advertised download bandwidth capacity (Mbps).</summary>
+    public float DownloadBandwidthMbps { get; set; }
 }
 
 /// <summary>
@@ -466,4 +478,89 @@ public sealed class PeerDamageEventPayload
 
     /// <summary>World Y position where the hit occurred.</summary>
     public float Y { get; set; }
+}
+
+// =============================================================================
+// LOOT SYNC PAYLOADS (Phase 1 — Distributed Loot Distribution)
+// =============================================================================
+
+/// <summary>
+/// Broadcast when an elite enemy is defeated. Each attacker generates a personal drop from seed.
+/// </summary>
+public sealed class PeerEliteDefeatedPayload
+{
+    public required string EliteId { get; init; }
+    public required string EliteSubType { get; init; }
+    public float X { get; set; }
+    public float Y { get; set; }
+    public long ServerTickWhenDefeated { get; init; }
+    public string[] AttackerPeerIds { get; init; } = Array.Empty<string>();
+}
+
+/// <summary>
+/// Broadcast active loot drops to peers (on creation or despawn sync).
+/// </summary>
+public sealed class PeerLootDropSyncPayload
+{
+    public required PeerLootDropEntry[] Drops { get; init; }
+    public long SenderTick { get; init; }
+}
+
+/// <summary>
+/// Serializable loot drop entry for P2P sync.
+/// </summary>
+public sealed class PeerLootDropEntry
+{
+    public required string DropId { get; init; }
+    public required string ItemId { get; init; }
+    public int Quantity { get; set; }
+    public float X { get; set; }
+    public float Y { get; set; }
+    public string[] EligiblePeerIds { get; init; } = Array.Empty<string>();
+    public bool IsCollected { get; set; }
+    public long CreatedAtServerTick { get; init; }
+    public int DespawnAfterTicks { get; set; } = DeterministicLootGeneratorDefaults.DespawnAfterTicks;
+    public string DropMode { get; set; } = "solo";
+    public string? GenerationSeed { get; set; }
+    public string? CollectedByPeerId { get; set; }
+    public long CollectedAtTick { get; set; }
+}
+
+/// <summary>
+/// Wire-format defaults referenced from gameplay without a project reference cycle.
+/// </summary>
+public static class DeterministicLootGeneratorDefaults
+{
+    public const int DespawnAfterTicks = 2400;
+}
+
+/// <summary>
+/// Broadcast when any peer picks up loot (autonomous — no host approval).
+/// </summary>
+public sealed class PeerLootPickupPayload
+{
+    public required string DropId { get; init; }
+    public required string PickedUpByPeerId { get; init; }
+    public long ServerTick { get; init; }
+}
+
+/// <summary>
+/// Broadcast when a solo-owned drop becomes fair game for all peers.
+/// </summary>
+public sealed class PeerLootFairGamePayload
+{
+    public required string DropId { get; init; }
+    public long ServerTick { get; init; }
+}
+
+/// <summary>
+/// Periodic peer capability metrics broadcast.
+/// </summary>
+public sealed class PeerMetricsUpdatePayload
+{
+    public required string PeerId { get; init; }
+    public int CurrentCpuUsagePercent { get; set; }
+    public float CurrentUploadUtilization { get; set; }
+    public float CurrentDownloadUtilization { get; set; }
+    public long Timestamp { get; set; }
 }

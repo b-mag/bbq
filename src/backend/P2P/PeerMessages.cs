@@ -72,6 +72,13 @@ public sealed class PeerMessage
     public PeerCombatActionPayload? CombatAction { get; set; }
     public PeerEnemySyncPayload? EnemySync { get; set; }
     public PeerDamageEventPayload? DamageEvent { get; set; }
+
+    // --- Loot & Metrics (Phase 1 — Distributed Loot) ---
+    public PeerEliteDefeatedPayload? EliteDefeated { get; set; }
+    public PeerLootDropSyncPayload? LootDropSync { get; set; }
+    public PeerLootPickupPayload? LootPickup { get; set; }
+    public PeerLootFairGamePayload? LootFairGame { get; set; }
+    public PeerMetricsUpdatePayload? MetricsUpdate { get; set; }
 }
 
 /// <summary>
@@ -110,4 +117,11 @@ public static class PeerMessageTypes
     public const string CombatAction = "combat_action";
     public const string EnemySync = "enemy_sync";
     public const string DamageEvent = "damage_event";
+
+    // Loot & Metrics (Phase 1 — Distributed Loot)
+    public const string EliteDefeated = "elite_defeated";
+    public const string LootDropSync = "loot_drop_sync";
+    public const string LootPickup = "loot_pickup";
+    public const string LootFairGame = "loot_fair_game";
+    public const string MetricsUpdate = "metrics_update";
 }

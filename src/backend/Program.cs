@@ -136,6 +136,12 @@ builder.Services.AddSingleton(sp => new OverworldSync(
 builder.Services.AddSingleton(sp => new ShardHostManager(
     sp.GetRequiredService<PeerMesh>(),
     sp.GetRequiredService<PeerIdentity>()));
+builder.Services.AddSingleton(sp => new TaskAssignmentManager(
+    sp.GetRequiredService<PeerMesh>(),
+    sp.GetRequiredService<PeerIdentity>()));
+builder.Services.AddSingleton(sp => new MetricsCollector(
+    sp.GetRequiredService<PeerIdentity>(),
+    sp.GetRequiredService<PeerMesh>()));
 builder.Services.AddSingleton<EnemySpawner>();
 builder.Services.AddSingleton<LootDropManager>();
 builder.Services.AddSingleton<PlayerInventory>();
@@ -143,10 +149,12 @@ builder.Services.AddSingleton(sp => new OverworldCombatSync(
     sp.GetRequiredService<PeerMesh>(),
     sp.GetRequiredService<PeerIdentity>(),
     sp.GetRequiredService<ShardHostManager>(),
+    sp.GetRequiredService<TaskAssignmentManager>(),
     sp.GetRequiredService<EnemySpawner>(),
     sp.GetRequiredService<OverworldSync>(),
     sp.GetRequiredService<LootDropManager>(),
-    sp.GetRequiredService<PlayerInventory>()));
+    sp.GetRequiredService<PlayerInventory>(),
+    sp.GetRequiredService<MetricsCollector>()));
 builder.Services.AddSingleton(sp => new PeerExchange(
     sp.GetRequiredService<PeerMesh>(),
     sp.GetRequiredService<PeerIdentity>(),
@@ -764,9 +772,9 @@ app.MapPost("/api/gameplay/equip", (EquipRequest request, PlayerInventory invent
 });
 
 // Pick up loot from ground
-app.MapPost("/api/gameplay/pickup-loot", (PickupLootRequest request, LootDropManager lootManager, PlayerInventory inventory, PeerIdentity identity) =>
+app.MapPost("/api/gameplay/pickup-loot", async (PickupLootRequest request, OverworldCombatSync combat, PlayerInventory inventory, PeerIdentity identity) =>
 {
-    var drop = lootManager.TryPickUp(request.DropId, identity.PeerId);
+    var drop = await combat.TryPickUpLootAsync(request.DropId, identity.PeerId);
     if (drop == null)
         return Results.Ok(new PickupLootResponse(false, null, "Drop not found or not eligible"));
 
@@ -777,9 +785,9 @@ app.MapPost("/api/gameplay/pickup-loot", (PickupLootRequest request, LootDropMan
 });
 
 // Get visible loot drops for this player
-app.MapGet("/api/gameplay/loot-drops", (LootDropManager lootManager, PeerIdentity identity) =>
+app.MapGet("/api/gameplay/loot-drops", (LootDropManager lootManager, PeerIdentity identity, OverworldCombatSync combat) =>
 {
-    var drops = lootManager.GetDropsForPeer(identity.PeerId);
+    var drops = lootManager.GetDropsForPeer(identity.PeerId, combat.CurrentServerTick);
     var entries = drops.Select(d =>
     {
         var def = Carcosa.Server.Gameplay.ItemRegistry.GetItem(d.ItemId);

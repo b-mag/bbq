@@ -26,6 +26,7 @@
 // =============================================================================
 
 using System.Collections.Concurrent;
+using Carcosa.Server.P2P;
 
 namespace Carcosa.Server.Gameplay;
 
@@ -66,10 +67,36 @@ public sealed class GroundLootDrop
     /// Based on RuneScape tagging rules.
     /// </summary>
     public required HashSet<string> EligiblePeerIds { get; init; }
-    /// <summary>Ticks remaining before this drop despawns (600 ticks = 30 seconds).</summary>
-    public int DespawnTicksRemaining { get; set; } = 600;
+
+    /// <summary>Server tick when this drop was created (for time-based eligibility).</summary>
+    public long CreatedAtServerTick { get; init; }
+
+    /// <summary>Ticks after creation before despawn (default 120s at 20Hz).</summary>
+    public int DespawnAfterTicks { get; set; } = DeterministicLootGenerator.DespawnAfterTicks;
+
+    /// <summary>How eligibility evolves over time for this drop.</summary>
+    public LootDropMode DropMode { get; set; } = LootDropMode.Solo;
+
+    /// <summary>Deterministic seed used to generate this drop (elite drops).</summary>
+    public string? GenerationSeed { get; set; }
+
+    /// <summary>Whether this drop has been collected.</summary>
+    public bool IsCollected { get; set; }
+
+    /// <summary>Peer that collected this drop.</summary>
+    public string? CollectedByPeerId { get; set; }
+
+    /// <summary>Server tick when collected.</summary>
+    public long CollectedAtTick { get; set; }
+
     /// <summary>Rarity of the dropped item (for rendering glow color on client).</summary>
     public ItemRarity Rarity { get; set; }
+
+    public bool IsExpired(int currentTick)
+        => !IsCollected && (currentTick - CreatedAtServerTick) > DespawnAfterTicks;
+
+    public bool CanPickup(string peerId, int currentTick)
+        => LootDropVisibility.CanPickup(this, peerId, currentTick);
 }
 
 /// <summary>
@@ -101,6 +128,22 @@ public static class LootSystem
         ["gronk"] = GronkLootTable,
     };
 
+    /// <summary>Expose loot table for deterministic generation.</summary>
+    internal static LootTableEntry[]? GetLootTable(string enemySubType)
+    {
+        if (LootTables.TryGetValue(enemySubType, out var table))
+            return table;
+
+        if (enemySubType.StartsWith("elite_", StringComparison.OrdinalIgnoreCase))
+        {
+            var baseType = enemySubType["elite_".Length..];
+            if (LootTables.TryGetValue(baseType, out table))
+                return table;
+        }
+
+        return null;
+    }
+
     // Drop ID counter
     private static int _dropCounter;
 
@@ -121,7 +164,8 @@ public static class LootSystem
     /// <param name="eligiblePeerIds">Set of peer IDs allowed to pick up (from tagging rules).</param>
     /// <returns>List of ground loot drops (may be empty if no table or bad luck).</returns>
     public static List<GroundLootDrop> GenerateDrops(
-        string enemySubType, float enemyX, float enemyY, HashSet<string> eligiblePeerIds)
+        string enemySubType, float enemyX, float enemyY, HashSet<string> eligiblePeerIds,
+        long createdAtServerTick = 0, LootDropMode mode = LootDropMode.Solo)
     {
         var drops = new List<GroundLootDrop>();
 
@@ -168,6 +212,9 @@ public static class LootSystem
                         Y = enemyY + offsetY,
                         EligiblePeerIds = eligiblePeerIds,
                         Rarity = item.Rarity,
+                        CreatedAtServerTick = createdAtServerTick,
+                        DespawnAfterTicks = DeterministicLootGenerator.DespawnAfterTicks,
+                        DropMode = mode,
                     });
 
                     break;
@@ -177,6 +224,20 @@ public static class LootSystem
 
         return drops;
     }
+
+    /// <summary>
+    /// Generate a single drop with a deterministic seed (delegates to DeterministicLootGenerator).
+    /// </summary>
+    public static GroundLootDrop? GenerateDropWithSeed(
+        string enemySubType,
+        float x,
+        float y,
+        string seed,
+        HashSet<string> eligiblePeerIds,
+        LootDropMode mode,
+        long createdAtServerTick)
+        => DeterministicLootGenerator.GenerateDropWithSeed(
+            enemySubType, x, y, seed, eligiblePeerIds, mode, createdAtServerTick);
 
     // =========================================================================
     // ELIGIBILITY DETERMINATION
@@ -222,14 +283,10 @@ public static class LootSystem
     }
 
     /// <summary>
-    /// Check if a specific peer can pick up a loot drop.
+    /// Check if a specific peer can pick up a loot drop (legacy — prefer LootDropVisibility).
     /// </summary>
-    public static bool CanPickUp(GroundLootDrop drop, string peerId)
-    {
-        // Empty eligibility set = anyone can pick up
-        if (drop.EligiblePeerIds.Count == 0) return true;
-        return drop.EligiblePeerIds.Contains(peerId);
-    }
+    public static bool CanPickUp(GroundLootDrop drop, string peerId, int currentServerTick = int.MaxValue)
+        => LootDropVisibility.CanPickup(drop, peerId, currentServerTick);
 }
 
 /// <summary>
@@ -249,41 +306,131 @@ public sealed class LootDropManager
         _drops[drop.DropId] = drop;
     }
 
-    /// <summary>Try to pick up a drop (removes it from the ground).</summary>
-    public GroundLootDrop? TryPickUp(string dropId, string peerId)
+    /// <summary>Upsert a drop from a P2P sync payload, rebasing ticks onto the local clock.</summary>
+    public void SyncDrop(PeerLootDropEntry entry, int localTick, long senderTick)
+    {
+        long age = Math.Max(0, senderTick - entry.CreatedAtServerTick);
+        long localCreatedAt = localTick - age;
+        var eligible = new HashSet<string>(entry.EligiblePeerIds);
+        var drop = new GroundLootDrop
+        {
+            DropId = entry.DropId,
+            ItemId = entry.ItemId,
+            Quantity = entry.Quantity,
+            X = entry.X,
+            Y = entry.Y,
+            EligiblePeerIds = eligible,
+            CreatedAtServerTick = localCreatedAt,
+            DespawnAfterTicks = entry.DespawnAfterTicks,
+            DropMode = ParseDropMode(entry.DropMode),
+            GenerationSeed = entry.GenerationSeed,
+            IsCollected = entry.IsCollected,
+            CollectedByPeerId = entry.CollectedByPeerId,
+            CollectedAtTick = entry.CollectedAtTick,
+        };
+
+        var item = ItemRegistry.GetItem(entry.ItemId);
+        if (item != null)
+            drop.Rarity = item.Rarity;
+
+        _drops[entry.DropId] = drop;
+    }
+
+    /// <summary>Try to pick up a drop (marks collected and removes from ground).</summary>
+    public GroundLootDrop? TryPickUp(string dropId, string peerId, int currentServerTick)
     {
         if (!_drops.TryGetValue(dropId, out var drop)) return null;
-        if (!LootSystem.CanPickUp(drop, peerId)) return null;
+        if (!LootDropVisibility.CanPickup(drop, peerId, currentServerTick)) return null;
+
+        drop.IsCollected = true;
+        drop.CollectedByPeerId = peerId;
+        drop.CollectedAtTick = currentServerTick;
         _drops.TryRemove(dropId, out _);
         return drop;
     }
 
+    /// <summary>Apply a remote pickup event (autonomous removal).</summary>
+    public bool ApplyRemotePickup(string dropId, string pickedUpByPeerId, long serverTick)
+    {
+        if (!_drops.TryGetValue(dropId, out var drop) || drop.IsCollected)
+            return false;
+
+        drop.IsCollected = true;
+        drop.CollectedByPeerId = pickedUpByPeerId;
+        drop.CollectedAtTick = serverTick;
+        _drops.TryRemove(dropId, out _);
+        return true;
+    }
+
+    /// <summary>Expand a drop to fair game (solo → anyone).</summary>
+    public bool ApplyFairGame(string dropId)
+    {
+        if (!_drops.TryGetValue(dropId, out var drop))
+            return false;
+
+        drop.EligiblePeerIds.Clear();
+        return true;
+    }
+
     /// <summary>Get drops visible to a specific peer (filtered by eligibility).</summary>
-    public List<GroundLootDrop> GetDropsForPeer(string peerId)
+    public List<GroundLootDrop> GetDropsForPeer(string peerId, int currentServerTick)
     {
         return _drops.Values
-            .Where(d => LootSystem.CanPickUp(d, peerId))
+            .Where(d => LootDropVisibility.IsVisibleTo(d, peerId, currentServerTick))
             .ToList();
     }
 
     /// <summary>
-    /// Process tick: decrement despawn timers and remove expired drops.
-    /// Called every tick (20Hz) by the combat sync loop.
+    /// Process tick: expand solo eligibility and remove expired drops.
+    /// Returns drop IDs that became fair game or expired (for broadcasting).
     /// </summary>
-    public void ProcessTick()
+    public LootTickResult ProcessTick(int currentServerTick)
     {
+        var fairGame = new List<string>();
         var expired = new List<string>();
+
         foreach (var (id, drop) in _drops)
         {
-            drop.DespawnTicksRemaining--;
-            if (drop.DespawnTicksRemaining <= 0)
-            {
+            if (LootDropVisibility.ExpandToFairGame(drop, currentServerTick))
+                fairGame.Add(id);
+
+            if (LootDropVisibility.IsExpired(drop, currentServerTick))
                 expired.Add(id);
-            }
         }
+
         foreach (var id in expired)
-        {
             _drops.TryRemove(id, out _);
-        }
+
+        return new LootTickResult(fairGame, expired);
     }
+
+    public static PeerLootDropEntry ToSyncEntry(GroundLootDrop drop)
+    {
+        return new PeerLootDropEntry
+        {
+            DropId = drop.DropId,
+            ItemId = drop.ItemId,
+            Quantity = drop.Quantity,
+            X = drop.X,
+            Y = drop.Y,
+            EligiblePeerIds = drop.EligiblePeerIds.ToArray(),
+            IsCollected = drop.IsCollected,
+            CreatedAtServerTick = drop.CreatedAtServerTick,
+            DespawnAfterTicks = drop.DespawnAfterTicks,
+            DropMode = drop.DropMode.ToString().ToLowerInvariant(),
+            GenerationSeed = drop.GenerationSeed,
+            CollectedByPeerId = drop.CollectedByPeerId,
+            CollectedAtTick = drop.CollectedAtTick,
+        };
+    }
+
+    private static LootDropMode ParseDropMode(string mode) => mode switch
+    {
+        "partyrotation" => LootDropMode.PartyRotation,
+        "partyanyone" => LootDropMode.PartyAnyOne,
+        "elitepersonal" => LootDropMode.ElitePersonal,
+        _ => LootDropMode.Solo,
+    };
 }
+
+public readonly record struct LootTickResult(IReadOnlyList<string> FairGameDropIds, IReadOnlyList<string> ExpiredDropIds);

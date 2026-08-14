@@ -117,6 +117,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 // all WebSocket handlers and API endpoints share the same instance.
 builder.Services.AddSingleton<ConnectionManager>();
 builder.Services.AddSingleton<CryptolStore>();
+builder.Services.AddSingleton<NatTraversalService>();
 builder.Services.AddSingleton(new MatchmakingClient(matchmakingConfig, serverName, port));
 
 // P2P Mesh: Load or create our persistent peer identity, then register the mesh
@@ -240,7 +241,8 @@ overworldSync.UpdateLocalPosition(100.5f, 180.5f, 0, 0);
 
 // Ensure WorldId and PublicAddress are set before tracker registration
 var worldShard = app.Services.GetRequiredService<WorldShard>();
-peerIdentity.PublicAddress = $"127.0.0.1:{port}"; // Fallback — tracker will update via STUN
+var natTraversalService = app.Services.GetRequiredService<NatTraversalService>();
+peerIdentity.PublicAddress = await natTraversalService.DiscoverAndApplyAsync(peerIdentity, port);
 
 Console.WriteLine($"[P2P:Init] Local player initialized at spawn point (100.5, 180.5)");
 Console.WriteLine($"[P2P:Init] Peer ID: {peerIdentity.PeerId}");

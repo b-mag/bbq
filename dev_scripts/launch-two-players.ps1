@@ -1,56 +1,72 @@
 # =============================================================================
-# Launch Two Game Instances (for testing multiplayer locally)
-# 
-# Starts:
-#   - Player 1: port 5000 (default)
-#   - Player 2: port 5001
-#   - Matchmaking: port 5100 (optional, start separately or via docker-compose)
+# Launch Two Local Peers for Glyph / Manual Discovery Testing
 #
-# Each instance opens in its own Edge window. You can test:
-#   - Both players joining the same lobby (Player 2 connects to Player 1's game)
-#   - Session discovery via matchmaking
-#   - Invader mode
+# This script intentionally disables the tracker path by pointing both peers at a
+# dead matchmaking URL. That keeps them from auto-discovering each other through
+# the tracker so we can validate the manual glyph fallback flow.
+#
+# Starts:
+#   - Player 1: port 5000
+#   - Player 2: port 5001
+#
+# Use this for testing:
+#   - glyph generation
+#   - direct manual connect
+#   - mesh bootstrap without tracker assistance
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$backendDir = Join-Path $scriptDir "..\src\backend"
+$backendExe = Join-Path $scriptDir "..\src\backend\bin\Release\net10.0\win-x64\publish\Carcosa.Server.exe"
+$deadTrackerUrl = "http://127.0.0.1:1"
 
-if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-    $env:PATH = "C:\Program Files\dotnet;$env:PATH"
+if (-not (Test-Path $backendExe)) {
+    Write-Host "ERROR: Game server exe not found. Run build_all_release.bat or publish the backend first." -ForegroundColor Red
+    Write-Host "  Expected: $backendExe" -ForegroundColor Gray
+    pause
+    exit 1
 }
 
 Write-Host "=========================================" -ForegroundColor Cyan
-Write-Host "  Launching Two Game Instances" -ForegroundColor Cyan
+Write-Host "  Launching Two Local Peer Test" -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Player 1: http://localhost:5000" -ForegroundColor Green
-Write-Host "  Player 2: http://localhost:5001" -ForegroundColor Green
+Write-Host "  Tracker override: $deadTrackerUrl" -ForegroundColor Yellow
+Write-Host "  Player 1:        http://localhost:5000" -ForegroundColor Green
+Write-Host "  Player 2:        http://localhost:5001" -ForegroundColor Green
 Write-Host ""
-Write-Host "  To test multiplayer:" -ForegroundColor Gray
-Write-Host "    1. Player 1 creates a lobby (host)" -ForegroundColor Gray
-Write-Host "    2. Player 2 uses 'Join a Game' or connects" -ForegroundColor Gray
-Write-Host "       to http://localhost:5000 directly" -ForegroundColor Gray
+Write-Host "  Purpose:" -ForegroundColor Gray
+Write-Host "    - manual glyph connection test" -ForegroundColor Gray
+Write-Host "    - peer mesh bootstrap without tracker" -ForegroundColor Gray
+Write-Host "    - local SHARD / PEX validation" -ForegroundColor Gray
 Write-Host ""
 
-# Start Player 1 (port 5000, with 1 bot for company)
-$p1 = Start-Process -FilePath "dotnet" `
-    -ArgumentList "run", "--project", $backendDir, "-p:SkipFrontendBuild=true", "--", "--port=5000", "--spawn-bots=1" `
-    -PassThru -WindowStyle Normal
+# Start Player 1
+$p1 = Start-Process -FilePath $backendExe `
+    -ArgumentList "--port=5000", "--name=Franz", "--matchmaking-url=$deadTrackerUrl" `
+    -WorkingDirectory (Split-Path $backendExe) `
+    -PassThru `
+    -WindowStyle Normal
 
 Start-Sleep -Seconds 3
 
-# Start Player 2 (port 5001, no bots)
-$p2 = Start-Process -FilePath "dotnet" `
-    -ArgumentList "run", "--project", $backendDir, "-p:SkipFrontendBuild=true", "--", "--port=5001" `
-    -PassThru -WindowStyle Normal
+# Start Player 2
+$p2 = Start-Process -FilePath $backendExe `
+    -ArgumentList "--port=5001", "--name=Marina", "--matchmaking-url=$deadTrackerUrl" `
+    -WorkingDirectory (Split-Path $backendExe) `
+    -PassThru `
+    -WindowStyle Normal
 
 Write-Host ""
-Write-Host "Both instances launched." -ForegroundColor Green
+Write-Host "Both peers launched in tracker-disabled mode." -ForegroundColor Green
 Write-Host "  Player 1 PID: $($p1.Id)" -ForegroundColor Gray
 Write-Host "  Player 2 PID: $($p2.Id)" -ForegroundColor Gray
 Write-Host ""
-Write-Host "Press any key to STOP both instances..."
+Write-Host "Use the glyph route on either peer to connect manually:" -ForegroundColor White
+Write-Host "  http://localhost:5000/api/p2p/glyph" -ForegroundColor Gray
+Write-Host "  http://localhost:5001/api/p2p/glyph" -ForegroundColor Gray
+Write-Host ""
+Write-Host "Press any key to STOP both peers..."
 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 
 Write-Host "Stopping..." -ForegroundColor Yellow

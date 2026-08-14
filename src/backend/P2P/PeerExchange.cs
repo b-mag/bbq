@@ -58,6 +58,30 @@ using System.Text.Json.Serialization;
 
 namespace Carcosa.Server.P2P;
 
+public sealed class PeerExchangeSettings
+{
+    public bool AllowCacheBootstrap { get; init; } = true;
+    public bool ClearCacheOnStartup { get; init; } = false;
+
+    public static PeerExchangeSettings Default { get; } = new();
+
+    public static PeerExchangeSettings FromArgs(string[] args)
+    {
+        var hasNoCacheConnect = args.Any(a =>
+            string.Equals(a, "--no-cache-connect", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(a, "--disable-cache-bootstrap", StringComparison.OrdinalIgnoreCase));
+
+        var hasClearCache = args.Any(a =>
+            string.Equals(a, "--clear-peer-cache", StringComparison.OrdinalIgnoreCase));
+
+        return new PeerExchangeSettings
+        {
+            AllowCacheBootstrap = !hasNoCacheConnect,
+            ClearCacheOnStartup = hasClearCache,
+        };
+    }
+}
+
 /// <summary>
 /// Manages periodic peer exchange (sharing known peer lists) and
 /// persists the peer cache to disk for reconnection across restarts.
@@ -72,6 +96,8 @@ public sealed class PeerExchange
     private readonly PeerIdentity _localIdentity;
     private readonly CancellationTokenSource _cts = new();
     private readonly string _cacheFilePath;
+    private readonly bool _allowCacheBootstrap;
+    private readonly bool _clearCacheOnStartup;
     private Task? _exchangeTask;
 
     /// <summary>
@@ -84,11 +110,28 @@ public sealed class PeerExchange
     // CONSTRUCTOR
     // =========================================================================
 
-    public PeerExchange(PeerMesh mesh, PeerIdentity localIdentity)
+    public PeerExchange(PeerMesh mesh, PeerIdentity localIdentity, PeerExchangeSettings? settings = null)
     {
+        settings ??= PeerExchangeSettings.Default;
+
         _mesh = mesh;
         _localIdentity = localIdentity;
         _cacheFilePath = Path.Combine(AppContext.BaseDirectory, "known-peers.json");
+        _allowCacheBootstrap = settings.AllowCacheBootstrap;
+        _clearCacheOnStartup = settings.ClearCacheOnStartup;
+
+        if (_clearCacheOnStartup)
+        {
+            _peerCache.Clear();
+            if (File.Exists(_cacheFilePath))
+            {
+                try { File.Delete(_cacheFilePath); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[P2P:PEX] Failed to clear peer cache: {ex.Message}");
+                }
+            }
+        }
 
         // Subscribe to incoming PEX messages
         _mesh.OnPeerMessage += HandlePeerMessage;
@@ -240,6 +283,12 @@ public sealed class PeerExchange
     /// </summary>
     public async Task ConnectFromCacheAsync()
     {
+        if (!_allowCacheBootstrap)
+        {
+            Console.WriteLine("[P2P:PEX] Cache bootstrap disabled by startup flag (--no-cache-connect)");
+            return;
+        }
+
         if (_peerCache.Count == 0)
         {
             Console.WriteLine("[P2P:PEX] No cached peers available for bootstrap");

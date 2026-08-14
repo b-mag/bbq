@@ -32,6 +32,11 @@
           DestinationFiles="@(FrontendOutput->'$(MSBuildProjectDirectory)\wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" />
   </Target>
 
+  <ItemGroup>
+    <None Include="Assets\**\*.json"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- Clean frontend output -->
   <Target Name="CleanFrontend" AfterTargets="Clean">
     <RemoveDir Directories="$(MSBuildProjectDirectory)\wwwroot" />

@@ -52,6 +52,7 @@ public sealed class TrackerClient
     private readonly HttpClient _http;
     private readonly PeerIdentity _localIdentity;
     private readonly PeerMesh _mesh;
+    private readonly WorldShard _worldShard;
     private readonly string _trackerUrl;
     private readonly CancellationTokenSource _cts = new();
     private readonly HashSet<string> _seenAdminMessages = new(); // Deduplication
@@ -85,11 +86,12 @@ public sealed class TrackerClient
     /// <param name="trackerUrl">Base URL of the matchmaking/tracker service (e.g., "http://localhost:5100").</param>
     /// <param name="localIdentity">Our peer identity.</param>
     /// <param name="mesh">The peer mesh (to connect to discovered peers).</param>
-    public TrackerClient(string trackerUrl, PeerIdentity localIdentity, PeerMesh mesh)
+    public TrackerClient(string trackerUrl, PeerIdentity localIdentity, PeerMesh mesh, WorldShard worldShard)
     {
         _trackerUrl = trackerUrl.TrimEnd('/');
         _localIdentity = localIdentity;
         _mesh = mesh;
+        _worldShard = worldShard;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
     }
 
@@ -244,6 +246,26 @@ public sealed class TrackerClient
 
                 var responseJson = await response.Content.ReadAsStringAsync();
                 var result = JsonSerializer.Deserialize(responseJson, TrackerJsonContext.Default.TrackerRegisterResponse);
+
+                if (result?.Peers != null)
+                {
+                    var shardPopulation = result.Peers
+                        .GroupBy(p => p.WorldId)
+                        .Where(g => !string.IsNullOrWhiteSpace(g.Key))
+                        .ToDictionary(g => g.Key, g => g.Count());
+
+                    if (string.IsNullOrWhiteSpace(_localIdentity.WorldId) ||
+                        shardPopulation.TryGetValue(_localIdentity.WorldId, out var localCount) && localCount >= PeerProtocol.MaxPeersPerWorld)
+                    {
+                        var nextShard = WorldShard.GetNextAvailableShardId(_localIdentity.WorldId, shardPopulation);
+                        if (!string.Equals(_localIdentity.WorldId, nextShard, StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine($"[P2P:Tracker] Current shard {_localIdentity.WorldId} is full; moving to {nextShard}");
+                            await _worldShard.SwitchShardAsync(nextShard);
+                            return await RegisterAndDiscoverAsync();
+                        }
+                    }
+                }
 
                 // Process admin messages (relay to mesh)
                 if (result?.AdminMessages != null)

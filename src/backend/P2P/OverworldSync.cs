@@ -149,6 +149,7 @@ public sealed class OverworldSync
         // Subscribe to mesh events
         _mesh.OnPeerMessage += HandlePeerMessage;
         _mesh.OnPeerLeft += HandlePeerLeft;
+        _mesh.OnPeerJoined += HandlePeerJoined;
     }
 
     /// <summary>
@@ -356,6 +357,45 @@ public sealed class OverworldSync
         {
             _remotePlayers.TryRemove(connection.RemotePeerId, out _);
         }
+    }
+
+    /// <summary>
+    /// Handle a peer joining the mesh — send immediate initial state so they know about us.
+    /// </summary>
+    private void HandlePeerJoined(PeerConnection connection)
+    {
+        // Send an immediate state update to the newly joined peer, even if we haven't moved.
+        // This ensures that when two peers connect via glyph, each peer immediately knows
+        // about the other's initial position instead of waiting for movement.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var initialState = new PeerMessage
+                {
+                    Type = PeerMessageTypes.StateUpdate,
+                    StateUpdate = new PeerStateUpdatePayload
+                    {
+                        PeerId = _localIdentity.PeerId,
+                        DisplayName = _localIdentity.DisplayName,
+                        X = _localX,
+                        Y = _localY,
+                        VelocityX = _localVelocityX,
+                        VelocityY = _localVelocityY,
+                        Status = _localStatus,
+                        PartyId = _localPartyId,
+                        IsPartyLeader = _localIsPartyLeader,
+                        Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    }
+                };
+
+                await connection.SendAsync(initialState);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[P2P:Sync] Failed to send initial state to peer {connection.RemotePeerId}: {ex.Message}");
+            }
+        });
     }
 
     // =========================================================================

@@ -139,19 +139,46 @@ public sealed class WorldShard
 
     /// <summary>
     /// Get the next shard ID to try when the current one is full.
-    /// Simply increments the shard index.
+    /// Prefers sequentially increasing shard IDs and expands to a new shard
+    /// only when all known shards are already at capacity.
     /// </summary>
     public string GetNextShardId()
     {
-        var currentIndex = CurrentShardIndex;
-        var nextIndex = (byte)((currentIndex + 1) % MaxShards);
-        return GenerateShardId(nextIndex);
+        return GetNextAvailableShardId(_localIdentity.WorldId, null);
+    }
+
+    /// <summary>
+    /// Evaluate the next available shard, preferring the current sequence order
+    /// over a global least-full heuristic. This keeps the shard mesh compact while
+    /// still allowing overflow into the next shard when needed.
+    /// </summary>
+    public static string GetNextAvailableShardId(string currentShardId, Dictionary<string, int>? shardPopulations)
+    {
+        var currentIndex = ParseShardIndex(currentShardId);
+        var maxIndex = shardPopulations is not null && shardPopulations.Count > 0
+            ? shardPopulations.Keys.Select(ParseShardIndex).DefaultIfEmpty((byte)0).Max()
+            : currentIndex;
+
+        // First, prefer the next shard in sequence if it has room.
+        for (var i = 1; i <= MaxShards; i++)
+        {
+            var candidateIndex = (byte)((currentIndex + i) % MaxShards);
+            var candidateId = GenerateShardId(candidateIndex);
+
+            if (shardPopulations is null || !shardPopulations.TryGetValue(candidateId, out var count) || count < PeerProtocol.MaxPeersPerWorld)
+            {
+                return candidateId;
+            }
+        }
+
+        // If all known shards are full, create the next sequential shard.
+        return GenerateShardId((byte)((maxIndex + 1) % MaxShards));
     }
 
     /// <summary>
     /// Select the best shard for a new player (used by tracker).
-    /// Strategy: find the shard with the most players that isn't full.
-    /// This keeps shards consolidated rather than spreading players thin.
+    /// Strategy: prefer the fullest shard that still has room, with a fallback to
+    /// the next sequential shard if all known shards are at capacity.
     /// </summary>
     /// <param name="shardPopulations">Map of shardId → player count (from tracker).</param>
     /// <returns>The recommended shard ID.</returns>
@@ -160,16 +187,14 @@ public sealed class WorldShard
         if (shardPopulations == null || shardPopulations.Count == 0)
             return GenerateShardId(0); // Default to first shard
 
-        // Find the most populated shard that isn't full
-        var best = shardPopulations
+        var available = shardPopulations
             .Where(kv => kv.Value < PeerProtocol.MaxPeersPerWorld)
-            .OrderByDescending(kv => kv.Value) // Prefer fuller shards (consolidate players)
-            .FirstOrDefault();
+            .OrderByDescending(kv => kv.Value)
+            .ToList();
 
-        if (best.Key != null)
-            return best.Key;
+        if (available.Count > 0)
+            return available[0].Key;
 
-        // All known shards are full — create the next one
         var maxIndex = shardPopulations.Keys
             .Select(ParseShardIndex)
             .DefaultIfEmpty((byte)0)

@@ -1,0 +1,97 @@
+{
+  "player_gangster": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "animSpeed": 150,
+    "color": "#8b4513"
+  },
+  "player_detective": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "animSpeed": 150,
+    "color": "#2f4f4f"
+  },
+  "player_surgeon": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "animSpeed": 150,
+    "color": "#f5f5dc"
+  },
+  "player_default": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "animSpeed": 150,
+    "color": "#c9a84c"
+  },
+  "tree": {
+    "width": 32,
+    "height": 48,
+    "frames": 1,
+    "color": "#2a5a1a",
+    "collision": true,
+    "collisionRadius": 0.4
+  },
+  "ruined_pillar": {
+    "width": 24,
+    "height": 40,
+    "frames": 1,
+    "color": "#6a6a60",
+    "collision": true,
+    "collisionRadius": 0.3
+  },
+  "fishing_boat": {
+    "width": 40,
+    "height": 24,
+    "frames": 1,
+    "color": "#6a5030",
+    "collision": false
+  },
+  "signpost": {
+    "width": 16,
+    "height": 32,
+    "frames": 1,
+    "color": "#7a6040",
+    "collision": true,
+    "collisionRadius": 0.2
+  },
+  "house": {
+    "width": 64,
+    "height": 64,
+    "frames": 1,
+    "color": "#5a4a3a",
+    "collision": true,
+    "collisionRadius": 1.5
+  },
+  "dungeon_entrance": {
+    "width": 32,
+    "height": 32,
+    "frames": 2,
+    "animSpeed": 500,
+    "color": "#3a2020"
+  },
+  "cultist_torch": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "animSpeed": 200,
+    "color": "#8b4000"
+  },
+  "cultist_dagger": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "animSpeed": 200,
+    "color": "#3a3a5c"
+  },
+  "boss_warehouse": {
+    "width": 48,
+    "height": 48,
+    "frames": 4,
+    "animSpeed": 300,
+    "color": "#3d0000"
+  }
+}

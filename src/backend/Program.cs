@@ -42,6 +42,7 @@ using Carcosa.Server.P2P;
 var port = 5000;
 var headless = false;
 var spawnBots = 0;
+var peerExchangeSettings = PeerExchangeSettings.FromArgs(args);
 
 // Show help
 if (args.Contains("--help") || args.Contains("-h"))
@@ -115,6 +116,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 // WHY SINGLETONS: The game has exactly one game loop, one connection manager, and
 // one session manager for the lifetime of the process. Singleton lifetime ensures
 // all WebSocket handlers and API endpoints share the same instance.
+builder.Services.AddSingleton(peerExchangeSettings);
 builder.Services.AddSingleton<ConnectionManager>();
 builder.Services.AddSingleton<CryptolStore>();
 builder.Services.AddSingleton<NatTraversalService>();
@@ -147,17 +149,19 @@ builder.Services.AddSingleton(sp => new OverworldCombatSync(
     sp.GetRequiredService<PlayerInventory>()));
 builder.Services.AddSingleton(sp => new PeerExchange(
     sp.GetRequiredService<PeerMesh>(),
-    sp.GetRequiredService<PeerIdentity>()));
+    sp.GetRequiredService<PeerIdentity>(),
+    sp.GetRequiredService<PeerExchangeSettings>()));
 builder.Services.AddSingleton(sp => new PeerValidator(
     sp.GetRequiredService<PeerMesh>(),
     sp.GetRequiredService<PeerIdentity>()));
-builder.Services.AddSingleton(sp => new TrackerClient(
-    matchmakingConfig.Url,
-    sp.GetRequiredService<PeerIdentity>(),
-    sp.GetRequiredService<PeerMesh>()));
 builder.Services.AddSingleton(sp => new WorldShard(
     sp.GetRequiredService<PeerIdentity>(),
     sp.GetRequiredService<PeerMesh>()));
+builder.Services.AddSingleton(sp => new TrackerClient(
+    matchmakingConfig.Url,
+    sp.GetRequiredService<PeerIdentity>(),
+    sp.GetRequiredService<PeerMesh>(),
+    sp.GetRequiredService<WorldShard>()));
 builder.Services.AddSingleton<GameLoop>(sp =>
 {
     var cm = sp.GetRequiredService<ConnectionManager>();
@@ -511,37 +515,19 @@ app.MapGet("/api/available-sessions", async (MatchmakingClient mm) =>
 
 // --- P2P Overworld State API (queried by local frontend) ---
 
-// Get overworld map data (the frontend loads this on startup instead of via WebSocket)
-app.MapGet("/api/p2p/map", async () =>
+// Overworld map data is bundled with the peer client and versioned by major game version.
+// This keeps the mesh self-supporting when the tracker is offline.
+app.MapGet("/api/p2p/map", () =>
 {
-    // Try to load local overworld.json first
-    var mapPath = Path.Combine(AppContext.BaseDirectory, "overworld.json");
-    if (File.Exists(mapPath))
-    {
-        var json = await File.ReadAllTextAsync(mapPath);
-        return Results.Content(json, "application/json");
-    }
-
-    // If not found locally, try to fetch from the matchmaking tracker
     try
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-        var response = await http.GetAsync($"{matchmakingConfig.Url}/api/overworld/map");
-        if (response.IsSuccessStatusCode)
-        {
-            var json = await response.Content.ReadAsStringAsync();
-            // Cache locally for future use
-            await File.WriteAllTextAsync(mapPath, json);
-            Console.WriteLine("[P2P:Map] Downloaded overworld map from tracker and cached locally");
-            return Results.Content(json, "application/json");
-        }
+        var json = StaticOverworldAsset.LoadJson(PeerProtocol.GameVersionMajor);
+        return Results.Content(json, "application/json");
     }
-    catch (Exception ex)
+    catch (FileNotFoundException)
     {
-        Console.WriteLine($"[P2P:Map] Failed to fetch map from tracker: {ex.Message}");
+        return Results.NotFound();
     }
-
-    return Results.NotFound();
 });
 
 // Get all visible players in the overworld (local + remote peers)

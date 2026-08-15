@@ -41,3 +41,6 @@ coverage/
 # ==== Junk folder I'll put stuff temporarily
 /inspire_delete/
 raw_assets/
+
+# ======= release folder and other release areas 
+/carcosa-release/

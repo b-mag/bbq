@@ -201,6 +201,8 @@ public sealed class EntityState
     public bool IsAlive { get; set; } = true;
     /// <summary>Number of med kits the player is carrying (only relevant for player entities).</summary>
     public int MedKits { get; set; }
+    /// <summary>Remaining attack cooldown ticks. Clients play attack frames when this jumps up.</summary>
+    public int AttackCooldown { get; set; }
 }
 
 /// <summary>

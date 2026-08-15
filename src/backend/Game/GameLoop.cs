@@ -653,7 +653,8 @@ public sealed class GameLoop : IDisposable
                 MaxHealth = e.MaxHealth,
                 SubType = e.SubType,
                 IsAlive = e.IsAlive,
-                MedKits = e.MedKits
+                MedKits = e.MedKits,
+                AttackCooldown = e.PrimaryFireCooldown
             };
         }
 

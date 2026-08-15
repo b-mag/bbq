@@ -30,6 +30,8 @@ import { EntityInterpolator } from '@/lib/engine/interpolation';
 import { VisualEffectsSystem } from '@/lib/engine/effects';
 import { GameMap } from '@/lib/map';
 import { EntityState } from '@/lib/messages';
+import { SpriteCache, initSprites } from '@/lib/engine/sprites';
+import { TileAtlas, initTilesets } from '@/lib/engine/tilesets';
 
 export interface GameCanvasProps {
   /** The decoded game map to render */
@@ -57,6 +59,8 @@ export interface GameCanvasProps {
   onEffectsReady?: (effects: VisualEffectsSystem) => void;
   /** Input handler reference — used to update aim angle based on player screen position. */
   inputHandler?: { updateAimAngle: (playerScreenX: number, playerScreenY: number) => void } | null;
+  /** Cosmetic body used for the local player sprite. */
+  localFigure?: string;
 }
 
 /**
@@ -76,13 +80,21 @@ export default function GameCanvas({
   onEffectsReady,
   spectateTargetId,
   inputHandler,
+  localFigure,
 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<Camera>(createCamera(width, height, tileSize));
   const interpolatorRef = useRef<EntityInterpolator>(new EntityInterpolator(20));
   const effectsRef = useRef<VisualEffectsSystem>(new VisualEffectsSystem());
+  const spriteCacheRef = useRef<SpriteCache | null>(null);
+  const tileAtlasRef = useRef<TileAtlas | null>(null);
   const animFrameRef = useRef<number>(0);
   const entitiesRef = useRef<EntityState[]>(entities);
+
+  useEffect(() => {
+    initSprites().then(cache => { spriteCacheRef.current = cache; });
+    initTilesets().then(atlas => { tileAtlasRef.current = atlas; });
+  }, []);
 
   // Update entities ref when new data arrives from server
   useEffect(() => {
@@ -172,11 +184,14 @@ export default function GameCanvas({
 
     // Render the frame (including active visual effects)
     const activeEffects = effectsRef.current.getActiveEffects();
-    renderFrame(ctx, camera, map, interpolatedEntities, localPlayerId, screenShake, activeEffects);
+    renderFrame(
+      ctx, camera, map, interpolatedEntities, localPlayerId, screenShake, activeEffects,
+      spriteCacheRef.current, tileAtlasRef.current, localFigure
+    );
 
     // Schedule next frame
     animFrameRef.current = requestAnimationFrame(render);
-  }, [map, localPlayerId, screenShake, spectateTargetId, inputHandler]);
+  }, [map, localPlayerId, screenShake, spectateTargetId, inputHandler, localFigure]);
 
   // Start/stop render loop
   useEffect(() => {

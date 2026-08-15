@@ -189,7 +189,6 @@ public enum MapScenario
     /// <summary>
     /// The Drowned Dock — BSP-generated rooms/corridors, 5 waves + boss.
     /// A waterlogged fishing village dungeon. Standard co-op with a clear win condition.
-    /// (Formerly "The Warehouse")
     /// </summary>
     DrownedDock,
     /// <summary>

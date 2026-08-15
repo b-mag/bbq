@@ -22,7 +22,7 @@
  * =============================================================================
  */
 
-export type PanelId = 'chat' | 'admin-message' | 'inventory' | 'ability-select' | 'pause-menu' | 'settings' | 'flame-offering' | 'inspect';
+export type PanelId = 'chat' | 'admin-message' | 'inventory' | 'ability-select' | 'pause-menu' | 'settings' | 'flame-offering' | 'inspect' | 'cryptol-shop' | 'dialogue';
 
 /** Simple panel stack — last in, first out. */
 let panelStack: PanelId[] = [];

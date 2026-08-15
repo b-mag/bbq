@@ -57,6 +57,8 @@ public sealed class PlayerSaveData
     // --- Identity / first-run ---
     public string DisplayName { get; set; } = "";
     public bool HasCompletedFirstRun { get; set; }
+    /// <summary>Cosmetic body id: a, b, or c.</summary>
+    public string Figure { get; set; } = "b";
 
     // --- Settings ---
     public bool OfflineMode { get; set; }
@@ -89,11 +91,13 @@ public sealed class PlayerSaveData
     public List<SaveInventorySlot?> Backpack { get; set; } = new();
 
     // --- Position (last known overworld position for resume) ---
-    public float LastX { get; set; } = 100.5f;
-    public float LastY { get; set; } = 180.5f;
+    public float LastX { get; set; } = 320.5f;
+    public float LastY { get; set; } = 544.5f;
     /// <summary>Safe overworld position to restore after dungeon logout.</summary>
-    public float LastSafeOverworldX { get; set; } = 100.5f;
-    public float LastSafeOverworldY { get; set; } = 180.5f;
+    public float LastSafeOverworldX { get; set; } = 320.5f;
+    public float LastSafeOverworldY { get; set; } = 544.5f;
+    /// <summary>Map width this position was saved against. 0/200 = legacy greybox.</summary>
+    public int WorldWidth { get; set; }
     public bool WasInDungeon { get; set; }
 
     // --- Timestamps ---

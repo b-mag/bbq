@@ -83,6 +83,7 @@ export class EntityInterpolator {
         existing.isAlive = serverEntity.isAlive;
         existing.subType = serverEntity.subType;
         existing.entityType = serverEntity.entityType;
+        existing.attackCooldown = serverEntity.attackCooldown;
       } else {
         // New entity — no interpolation needed, snap to position
         this.entities.set(serverEntity.id, {

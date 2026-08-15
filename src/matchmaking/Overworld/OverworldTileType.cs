@@ -47,8 +47,24 @@ public enum OverworldTileType : byte
     Floor = 12,
     /// <summary>Door — walkable. Building entrance.</summary>
     Door = 13,
-    /// <summary>Dark grass — walkable. Transition near forests/ruins.</summary>
+    /// <summary>Walkable dark grass — transition near forests/ruins.</summary>
     DarkGrass = 14,
     /// <summary>Mist — walkable but obscured. Near Lake Hali.</summary>
     Mist = 15,
+    /// <summary>Desert waste — walkable. Western dunes.</summary>
+    Desert = 16,
+    /// <summary>Swamp/marsh — walkable. Dark World-style wetlands.</summary>
+    Swamp = 17,
+    /// <summary>Climbable mountain path — walkable northern trails.</summary>
+    MountainPath = 18,
+    /// <summary>Snow/peak — walkable high mountains (black stars).</summary>
+    Snow = 19,
+    /// <summary>Ash flats — walkable. Court of the Dragon.</summary>
+    Ash = 20,
+    /// <summary>Palace stone — walkable. Yellow palaces.</summary>
+    Palace = 21,
+    /// <summary>Organic flesh/mud — walkable. Giger village ground.</summary>
+    Flesh = 22,
+    /// <summary>Climbable ladder — walkable, vertical only. LTTP-style elevation.</summary>
+    Ladder = 23,
 }

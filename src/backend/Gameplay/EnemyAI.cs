@@ -114,6 +114,12 @@ public static class EnemyAI
     {
         if (!enemy.IsAlive) return;
 
+        if (enemy.SubType.StartsWith("npc_", StringComparison.OrdinalIgnoreCase))
+        {
+            ProcessPassive(enemy);
+            return;
+        }
+
         // Decrement attack cooldown
         if (enemy.PrimaryFireCooldown > 0)
         {

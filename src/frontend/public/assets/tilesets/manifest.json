@@ -1,0 +1,45 @@
+{
+  "catalog": "/assets/catalog.json",
+  "tileSize": 32,
+  "sheets": {
+    "shore": { "file": "shore_of_hali.png", "columns": 8 },
+    "palaces": { "file": "yellow_palaces.png", "columns": 8 },
+    "ruined": { "file": "ruined_carcosa.png", "columns": 8 },
+    "waste": { "file": "the_waste.png", "columns": 8 },
+    "realms": { "file": "carcosa_realms.png", "columns": 8 }
+  },
+  "overworld": {
+    "0": { "sheet": "waste", "index": 0, "variants": 4 },
+    "1": { "sheet": "shore", "index": 0, "frames": 4, "animSpeed": 280 },
+    "2": { "sheet": "shore", "index": 8, "frames": 4, "animSpeed": 320 },
+    "3": { "sheet": "waste", "index": 16, "variants": 4 },
+    "4": { "sheet": "waste", "index": 24, "variants": 4 },
+    "5": { "sheet": "ruined", "index": 16, "variants": 4 },
+    "6": { "sheet": "ruined", "index": 0, "variants": 4 },
+    "7": { "sheet": "shore", "index": 16, "variants": 4 },
+    "8": { "sheet": "shore", "index": 32, "variants": 4 },
+    "9": { "sheet": "palaces", "index": 20, "frames": 4, "animSpeed": 400 },
+    "10": { "sheet": "ruined", "index": 8, "variants": 4 },
+    "11": { "sheet": "palaces", "index": 8, "variants": 4 },
+    "12": { "sheet": "palaces", "index": 0, "variants": 4 },
+    "13": { "sheet": "palaces", "index": 16, "variants": 4 },
+    "14": { "sheet": "waste", "index": 8, "variants": 4 },
+    "15": { "sheet": "shore", "index": 24, "frames": 4, "animSpeed": 360 },
+    "16": { "sheet": "realms", "index": 0, "variants": 8 },
+    "17": { "sheet": "realms", "index": 8, "variants": 8 },
+    "18": { "sheet": "realms", "index": 48, "variants": 8 },
+    "19": { "sheet": "realms", "index": 32, "variants": 8 },
+    "20": { "sheet": "realms", "index": 24, "variants": 8 },
+    "21": { "sheet": "realms", "index": 40, "variants": 8 },
+    "22": { "sheet": "realms", "index": 16, "variants": 8 },
+    "23": { "sheet": "ruined", "index": 0, "variants": 4 }
+  },
+  "dungeon": {
+    "0": { "sheet": "palaces", "index": 0, "variants": 4 },
+    "1": { "sheet": "palaces", "index": 8, "variants": 4 },
+    "2": { "sheet": "palaces", "index": 16, "variants": 4 },
+    "3": { "sheet": "shore", "index": 0, "frames": 4, "animSpeed": 280 },
+    "4": { "sheet": "ruined", "index": 8, "variants": 4 },
+    "5": { "sheet": "shore", "index": 16, "variants": 4 }
+  }
+}

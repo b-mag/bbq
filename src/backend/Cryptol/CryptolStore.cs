@@ -95,6 +95,32 @@ public sealed class CryptolStore
     }
 
     /// <summary>
+    /// Spend Cryptol. Returns false if the player cannot afford the amount.
+    /// </summary>
+    public bool TrySpend(string playerId, int amount, out int newBalance)
+    {
+        lock (_lock)
+        {
+            if (!_data.Players.TryGetValue(playerId, out var info))
+            {
+                info = new PlayerCryptolInfo { Balance = 0 };
+                _data.Players[playerId] = info;
+            }
+
+            if (amount <= 0 || info.Balance < amount)
+            {
+                newBalance = info.Balance;
+                return false;
+            }
+
+            info.Balance -= amount;
+            newBalance = info.Balance;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Award Cryptol to multiple players at once (e.g., end-of-game rewards).
     /// More efficient than calling AwardCryptol individually (single file write).
     /// </summary>

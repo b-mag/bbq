@@ -32,6 +32,9 @@ import { Camera, worldToScreen, getVisibleBounds, getEffectiveTileSize } from '.
 import { GameMap, TileType, TILE_COLORS, getTile } from '../map';
 import { EntityState } from '../messages';
 import { VisualEffect } from './effects';
+import { SpriteCache, facingFromMotion, playerSpriteName } from './sprites';
+import { TileAtlas } from './tilesets';
+import { walkDistance, isAttacking, attackElapsedMs, syncAttackFromCooldown } from './spriteAnim';
 
 // Entity rendering colors by class/type
 const PLAYER_COLORS: Record<string, string> = {
@@ -64,9 +67,15 @@ export function renderFrame(
   entities: EntityState[],
   localPlayerId: string | null,
   screenShake: { x: number; y: number },
-  effects: VisualEffect[] = []
+  effects: VisualEffect[] = [],
+  spriteCache: SpriteCache | null = null,
+  tileAtlas: TileAtlas | null = null,
+  localFigure?: string
 ): void {
   const { viewportWidth, viewportHeight } = camera;
+  const nowMs = Date.now();
+
+  ctx.imageSmoothingEnabled = false;
 
   // Clear canvas
   ctx.fillStyle = '#0d0a07';
@@ -78,7 +87,7 @@ export function renderFrame(
 
   // Render map tiles
   if (map) {
-    renderMap(ctx, camera, map);
+    renderMap(ctx, camera, map, tileAtlas, nowMs);
   }
 
   // Render entities (sorted by Y for pseudo-depth)
@@ -86,13 +95,15 @@ export function renderFrame(
 
   for (const entity of sortedEntities) {
     if (!entity.isAlive) {
-      // Render death X marker for dead players (not enemies/projectiles)
       if (entity.entityType === 'player') {
         renderDeathMarker(ctx, camera, entity);
       }
       continue;
     }
-    renderEntity(ctx, camera, entity, entity.id === `player_${localPlayerId}`);
+    renderEntity(
+      ctx, camera, entity, entity.id === `player_${localPlayerId}`,
+      spriteCache, nowMs, localFigure
+    );
   }
 
   // Render visual effects (muzzle flashes, slash arcs, impact sparks)
@@ -107,11 +118,16 @@ export function renderFrame(
 /**
  * Render the visible portion of the tile map.
  */
-function renderMap(ctx: CanvasRenderingContext2D, camera: Camera, map: GameMap): void {
+function renderMap(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  map: GameMap,
+  atlas: TileAtlas | null,
+  nowMs: number
+): void {
   const bounds = getVisibleBounds(camera);
   const tileSize = getEffectiveTileSize(camera);
 
-  // Clamp bounds to map dimensions
   const minX = Math.max(0, bounds.minX);
   const minY = Math.max(0, bounds.minY);
   const maxX = Math.min(map.width - 1, bounds.maxX);
@@ -122,43 +138,12 @@ function renderMap(ctx: CanvasRenderingContext2D, camera: Camera, map: GameMap):
       const tile = getTile(map, x, y);
       const screen = worldToScreen(camera, x, y);
 
-      // Fill tile
-      ctx.fillStyle = TILE_COLORS[tile] || TILE_COLORS[TileType.Wall];
-      ctx.fillRect(
-        Math.floor(screen.x),
-        Math.floor(screen.y),
-        tileSize + 1,  // +1 to prevent gaps between tiles
-        tileSize + 1
-      );
+      const drawn = atlas?.drawDungeonTile(
+        ctx, tile, x, y, screen.x, screen.y, tileSize, nowMs
+      ) ?? false;
 
-      // Add subtle grid lines for floor/cobblestone
-      if (tile === TileType.Floor || tile === TileType.Cobblestone) {
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.15)';
-        ctx.lineWidth = 0.5;
-        ctx.strokeRect(
-          Math.floor(screen.x),
-          Math.floor(screen.y),
-          tileSize,
-          tileSize
-        );
-      }
-
-      // Door highlight
-      if (tile === TileType.Door) {
-        ctx.strokeStyle = '#8a6d2f';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(
-          Math.floor(screen.x) + 2,
-          Math.floor(screen.y) + 2,
-          tileSize - 4,
-          tileSize - 4
-        );
-      }
-
-      // Water shimmer effect
-      if (tile === TileType.Water) {
-        const shimmer = Math.sin(Date.now() * 0.001 + x * 0.5 + y * 0.3) * 0.1;
-        ctx.fillStyle = `rgba(100, 150, 200, ${0.05 + shimmer})`;
+      if (!drawn) {
+        ctx.fillStyle = TILE_COLORS[tile] || TILE_COLORS[TileType.Wall];
         ctx.fillRect(
           Math.floor(screen.x),
           Math.floor(screen.y),
@@ -177,7 +162,10 @@ function renderEntity(
   ctx: CanvasRenderingContext2D,
   camera: Camera,
   entity: EntityState,
-  isLocalPlayer: boolean
+  isLocalPlayer: boolean,
+  spriteCache: SpriteCache | null,
+  nowMs: number,
+  localFigure?: string
 ): void {
   const screen = worldToScreen(camera, entity.x, entity.y);
   const tileSize = getEffectiveTileSize(camera);
@@ -185,10 +173,10 @@ function renderEntity(
 
   switch (entity.entityType) {
     case 'player':
-      renderPlayer(ctx, screen.x, screen.y, radius, entity, isLocalPlayer);
+      renderPlayer(ctx, screen.x, screen.y, radius, entity, isLocalPlayer, spriteCache, nowMs, localFigure);
       break;
     case 'enemy':
-      renderEnemy(ctx, screen.x, screen.y, radius, entity);
+      renderEnemy(ctx, screen.x, screen.y, radius, entity, spriteCache, nowMs, tileSize);
       break;
     case 'projectile':
       renderProjectile(ctx, screen.x, screen.y, tileSize * 0.15, entity);
@@ -205,28 +193,45 @@ function renderPlayer(
   y: number,
   radius: number,
   entity: EntityState,
-  isLocal: boolean
+  isLocal: boolean,
+  spriteCache: SpriteCache | null,
+  nowMs: number,
+  localFigure?: string
 ): void {
   const color = PLAYER_COLORS[entity.subType || 'default'] || PLAYER_COLORS.default;
+  const moving = entity.velocityX !== 0 || entity.velocityY !== 0;
+  const facing = facingFromMotion(entity.id, entity.velocityX, entity.velocityY);
+  const classSprite = entity.subType ? `player_${entity.subType}` : null;
+  const spriteName = isLocal
+    ? playerSpriteName(localFigure)
+    : (classSprite && spriteCache?.getEntry(classSprite) ? classSprite : playerSpriteName());
+  const dist = walkDistance(entity.id, entity.x, entity.y);
+  const attacking = isAttacking(entity.id);
+  const attackMs = attackElapsedMs(entity.id);
 
-  // Shadow
   ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
   ctx.beginPath();
   ctx.ellipse(x + 2, y + radius * 0.6, radius * 0.7, radius * 0.3, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Body circle
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.fill();
+  const tileSize = radius / 0.35;
+  const drawn = spriteCache?.drawSprite(ctx, spriteName, x, y, tileSize, {
+    action: attacking ? 'attack' : (moving ? 'walk' : 'idle'),
+    facing,
+    distance: dist,
+    attackElapsedMs: attacking ? attackMs : undefined,
+  }) ?? false;
 
-  // Border
-  ctx.strokeStyle = isLocal ? '#c9a84c' : '#666';
-  ctx.lineWidth = isLocal ? 2 : 1;
-  ctx.stroke();
+  if (!drawn) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = isLocal ? '#c9a84c' : '#666';
+    ctx.lineWidth = isLocal ? 2 : 1;
+    ctx.stroke();
+  }
 
-  // Local player indicator (golden ring)
   if (isLocal) {
     ctx.strokeStyle = 'rgba(201, 168, 76, 0.5)';
     ctx.lineWidth = 1;
@@ -235,7 +240,6 @@ function renderPlayer(
     ctx.stroke();
   }
 
-  // Health bar (only show if damaged)
   if (entity.health < entity.maxHealth) {
     renderHealthBar(ctx, x, y - radius - 6, radius * 2, 3, entity.health, entity.maxHealth);
   }
@@ -249,42 +253,56 @@ function renderEnemy(
   x: number,
   y: number,
   radius: number,
-  entity: EntityState
+  entity: EntityState,
+  spriteCache: SpriteCache | null,
+  nowMs: number,
+  tileSize: number
 ): void {
   const color = ENEMY_COLORS[entity.subType || 'default'] || ENEMY_COLORS.default;
+  const spriteName = spriteCache?.getEntry(entity.subType || '') ? (entity.subType as string) : 'gronk';
+  const moving = entity.velocityX !== 0 || entity.velocityY !== 0;
+  const dist = walkDistance(entity.id, entity.x, entity.y);
+  const facing = facingFromMotion(entity.id, entity.velocityX, entity.velocityY);
+  syncAttackFromCooldown(entity.id, entity.attackCooldown);
+  const attacking = isAttacking(entity.id);
+  const attackMs = attackElapsedMs(entity.id);
 
-  // Shadow
   ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
   ctx.beginPath();
   ctx.ellipse(x + 2, y + radius * 0.6, radius * 0.7, radius * 0.3, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Triangle body
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.moveTo(x, y - radius);
-  ctx.lineTo(x - radius * 0.87, y + radius * 0.5);
-  ctx.lineTo(x + radius * 0.87, y + radius * 0.5);
-  ctx.closePath();
-  ctx.fill();
+  const drawn = spriteCache?.drawSprite(ctx, spriteName, x, y, tileSize, {
+    action: attacking ? 'attack' : (moving ? 'walk' : 'idle'),
+    facing,
+    distance: dist,
+    attackElapsedMs: attacking ? attackMs : undefined,
+  }) ?? false;
 
-  // Glowing eye effect
-  ctx.fillStyle = '#ff3333';
-  ctx.beginPath();
-  ctx.arc(x, y - radius * 0.1, radius * 0.15, 0, Math.PI * 2);
-  ctx.fill();
+  if (!drawn) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x, y - radius);
+    ctx.lineTo(x - radius * 0.87, y + radius * 0.5);
+    ctx.lineTo(x + radius * 0.87, y + radius * 0.5);
+    ctx.closePath();
+    ctx.fill();
 
-  // Border
-  ctx.strokeStyle = '#8b0000';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(x, y - radius);
-  ctx.lineTo(x - radius * 0.87, y + radius * 0.5);
-  ctx.lineTo(x + radius * 0.87, y + radius * 0.5);
-  ctx.closePath();
-  ctx.stroke();
+    ctx.fillStyle = '#ff3333';
+    ctx.beginPath();
+    ctx.arc(x, y - radius * 0.1, radius * 0.15, 0, Math.PI * 2);
+    ctx.fill();
 
-  // Health bar
+    ctx.strokeStyle = '#8b0000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y - radius);
+    ctx.lineTo(x - radius * 0.87, y + radius * 0.5);
+    ctx.lineTo(x + radius * 0.87, y + radius * 0.5);
+    ctx.closePath();
+    ctx.stroke();
+  }
+
   if (entity.health < entity.maxHealth) {
     renderHealthBar(ctx, x, y - radius - 8, radius * 2, 3, entity.health, entity.maxHealth);
   }

@@ -114,26 +114,90 @@ public sealed class EnemySpawner
         new SpawnZone
         {
             Id = "south_meadow",
-            MinX = 80, MaxX = 120,
-            MinY = 160, MaxY = 200,
-            MaxEnemies = 5,
+            MinX = 280, MaxX = 380,
+            MinY = 500, MaxY = 560,
+            MaxEnemies = 6,
             EnemyType = "gronk",
         },
         new SpawnZone
         {
             Id = "central_plains",
-            MinX = 90, MaxX = 130,
-            MinY = 130, MaxY = 160,
+            MinX = 300, MaxX = 380,
+            MinY = 380, MaxY = 480,
+            MaxEnemies = 5,
+            EnemyType = "gronk",
+        },
+        new SpawnZone
+        {
+            Id = "swamp_edge",
+            MinX = 140, MaxX = 240,
+            MinY = 340, MaxY = 420,
             MaxEnemies = 4,
             EnemyType = "gronk",
         },
         new SpawnZone
         {
-            Id = "eastern_grove",
-            MinX = 130, MaxX = 160,
-            MinY = 150, MaxY = 185,
+            Id = "desert_fringe",
+            MinX = 80, MaxX = 180,
+            MinY = 220, MaxY = 300,
             MaxEnemies = 3,
-            EnemyType = "gronk",
+            EnemyType = "elite_gronk",
+        },
+        new SpawnZone
+        {
+            Id = "village_npcs",
+            MinX = 300, MaxX = 340,
+            MinY = 520, MaxY = 550,
+            MaxEnemies = 4,
+            EnemyType = "npc_villager",
+        },
+        new SpawnZone
+        {
+            Id = "dock_npcs",
+            MinX = 300, MaxX = 350,
+            MinY = 560, MaxY = 590,
+            MaxEnemies = 3,
+            EnemyType = "npc_fisher",
+        },
+        new SpawnZone
+        {
+            Id = "palace_npcs",
+            MinX = 500, MaxX = 540,
+            MinY = 140, MaxY = 180,
+            MaxEnemies = 2,
+            EnemyType = "npc_monk",
+        },
+        new SpawnZone
+        {
+            Id = "west_hamlet_npcs",
+            MinX = 100, MaxX = 140,
+            MinY = 530, MaxY = 570,
+            MaxEnemies = 2,
+            EnemyType = "npc_villager",
+        },
+        new SpawnZone
+        {
+            Id = "swamp_npcs",
+            MinX = 150, MaxX = 210,
+            MinY = 350, MaxY = 400,
+            MaxEnemies = 2,
+            EnemyType = "npc_villager",
+        },
+        new SpawnZone
+        {
+            Id = "forest_npcs",
+            MinX = 470, MaxX = 540,
+            MinY = 300, MaxY = 360,
+            MaxEnemies = 2,
+            EnemyType = "npc_monk",
+        },
+        new SpawnZone
+        {
+            Id = "peak_npcs",
+            MinX = 280, MaxX = 360,
+            MinY = 20, MaxY = 80,
+            MaxEnemies = 1,
+            EnemyType = "npc_monk",
         },
     ];
 
@@ -219,8 +283,8 @@ public sealed class EnemySpawner
             Y = y,
             SpawnX = x,
             SpawnY = y,
-            Health = 30,
-            MaxHealth = 30,
+            Health = zone.EnemyType.StartsWith("npc_") ? 9999 : 30,
+            MaxHealth = zone.EnemyType.StartsWith("npc_") ? 9999 : 30,
             Speed = 1.5f,       // Slow wander speed (tiles/sec)
             Damage = 5,         // Peck attack damage
             IsAlive = true,

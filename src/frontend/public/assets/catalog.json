@@ -1,0 +1,452 @@
+{
+  "version": 1,
+  "updated": "2026-08-15",
+  "purpose": "Human/agent reference for every packed art file: layout, facing, anchor, and where unique pieces live on the overworld. Runtime loaders still use sprites/manifest.json and tilesets/manifest.json.",
+  "paths": {
+    "sprites": "src/frontend/public/assets/sprites/",
+    "tilesets": "src/frontend/public/assets/tilesets/",
+    "spriteManifest": "src/frontend/public/assets/sprites/manifest.json",
+    "tilesetManifest": "src/frontend/public/assets/tilesets/manifest.json",
+    "rawConceptSheets": "raw_assets/",
+    "dialogue": "src/frontend/lib/npc-dialogue.ts",
+    "palettes": "src/frontend/lib/palettes.ts",
+    "worldGen": "src/backend/Gameplay/OverworldWorldGen.cs",
+    "packSprites": "dev_scripts/pack-sprite-assets.py",
+    "packAttackRows": "dev_scripts/pack-attack-rows.py",
+    "packBiomes": "dev_scripts/pack-biome-art.py"
+  },
+  "conventions": {
+    "view": "three-quarter / ¾ (LTTP + Chaos Engine). Sprites are feet-anchored on the world point. Buildings show a south face; the door is on the south wall. Enter by walking up from the south; exit interiors through the bottom door.",
+    "pixelGrid": 32,
+    "imageSmoothing": false,
+    "characterSheet": {
+      "cell": "width x height from the sprite manifest (players 32x32, Gronk 48x48)",
+      "columns": "walk frames (idle = column 0)",
+      "walkRows": "0 .. directions-1",
+      "attackRows": "directions .. 2*directions-1 (optional)",
+      "facingIndex": { "0": "down / south / toward camera", "1": "left / west", "2": "right / east", "3": "up / north / away" },
+      "playerSheetPixels": "128x256 (4 walk columns, 4 walk rows + 4 attack rows)",
+      "note": "If a replacement sheet is Down/Right/Left/Up instead of D,L,R,U, say so here and in the sprite entry facingOrder."
+    },
+    "propSheet": {
+      "frames": 1,
+      "facing": "south facade toward camera. No direction rows.",
+      "anchor": "feet. The bottom of the PNG sits on the world (x, y) tile center.",
+      "door": "implied on the south face of enterable buildings"
+    },
+    "tilesetAtlas": {
+      "tileSize": 32,
+      "columns": 8,
+      "index": "row-major: sx = (index % 8) * 32, sy = floor(index / 8) * 32",
+      "variants": "consecutive cells after index, chosen by worldX/worldY hash",
+      "frames": "consecutive cells after index, animated"
+    },
+    "howToAddArt": [
+      "Drop a PNG in sprites/ or tilesets/ named for its id (player_a.png, organic_house.png, …).",
+      "Add or edit the id in sprites/manifest.json or tilesets/manifest.json.",
+      "Add a matching entry in this catalog (file, cell, facing, who uses it, map placement if unique).",
+      "Several ids may share one PNG via manifest `file`.",
+      "Rebuild / hard-refresh; the game server wwwroot copy is stale until frontend is rebuilt into it."
+    ]
+  },
+  "characterSheets": [
+    {
+      "id": "player_a",
+      "file": "sprites/player_a.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "attackRows": true,
+      "usedBy": ["character select figure a", "overworld / dungeon local-or-peer when figure=a"],
+      "aliases": ["player_surgeon"]
+    },
+    {
+      "id": "player_b",
+      "file": "sprites/player_b.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "attackRows": true,
+      "usedBy": ["character select figure b (default)", "overworld / dungeon"],
+      "aliases": ["player_default", "player_detective"]
+    },
+    {
+      "id": "player_c",
+      "file": "sprites/player_c.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "attackRows": true,
+      "usedBy": ["character select figure c"],
+      "aliases": ["player_gangster"]
+    }
+  ],
+  "creatureSheets": [
+    {
+      "id": "gronk",
+      "file": "sprites/gronk.png",
+      "cell": [48, 48],
+      "frames": 4,
+      "directions": 1,
+      "facing": "south / toward camera (single row). Attack row below if present.",
+      "usedBy": ["overworld / dungeon Gronks"],
+      "aliases": ["elite_gronk"]
+    },
+    {
+      "id": "boss_warehouse",
+      "file": "sprites/boss_warehouse.png",
+      "cell": [48, 48],
+      "frames": 4,
+      "directions": 1,
+      "facing": "south",
+      "usedBy": ["warehouse dungeon boss"]
+    },
+    {
+      "id": "cultist_torch",
+      "file": "sprites/cultist_torch.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "usedBy": ["dungeon cultist", "npc_fisher", "npc_ferryman", "npc_ember"]
+    },
+    {
+      "id": "cultist_dagger",
+      "file": "sprites/cultist_dagger.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "usedBy": ["dungeon cultist", "npc_ashwalker"]
+    },
+    {
+      "id": "cultist_acolyte",
+      "file": "sprites/cultist_acolyte.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "usedBy": ["dungeon cultist", "npc_villager", "npc_widow", "npc_marsh", "cult_leader"]
+    },
+    {
+      "id": "cultist_shotgun",
+      "file": "sprites/cultist_shotgun.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "usedBy": ["dungeon cultist", "npc_ranger"]
+    },
+    {
+      "id": "cultist_lightning",
+      "file": "sprites/cultist_lightning.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "usedBy": ["dungeon cultist", "npc_hermit"]
+    },
+    {
+      "id": "cultist_chanter",
+      "file": "sprites/cultist_chanter.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "usedBy": ["dungeon cultist", "npc_monk", "npc_cassilda", "npc_priest", "npc_shopkeep"]
+    }
+  ],
+  "props": [
+    {
+      "id": "tree",
+      "file": "sprites/tree.png",
+      "size": [32, 48],
+      "facing": "south canopy, trunk at feet",
+      "anchor": "feet",
+      "collisionRadius": 0.4,
+      "placement": "scattered on grass / dark grass / swamp (seeded, ~420)"
+    },
+    {
+      "id": "ruined_pillar",
+      "file": "sprites/ruined_pillar.png",
+      "size": [24, 40],
+      "facing": "south",
+      "anchor": "feet",
+      "placement": "King in Yellow cobblestone ruins (~40)"
+    },
+    {
+      "id": "signpost",
+      "file": "sprites/signpost.png",
+      "size": [16, 32],
+      "facing": "south board",
+      "anchor": "feet",
+      "tiles": [[320, 447], [320, 294], [409, 294]]
+    },
+    {
+      "id": "house",
+      "file": "sprites/house.png",
+      "size": [64, 64],
+      "facing": "south facade / door on south",
+      "anchor": "feet",
+      "enterable": false,
+      "aliases": ["meditation_altar"],
+      "notes": "Village flame altar uses this PNG via meditation_altar. Stand on the south face and press F or E."
+    },
+    {
+      "id": "organic_house",
+      "file": "sprites/organic_house.png",
+      "size": [64, 80],
+      "facing": "south facade / door on south",
+      "anchor": "feet",
+      "enterable": true,
+      "interior": "16x11 house room",
+      "placement": "Fishing Village + West Hamlet"
+    },
+    {
+      "id": "giger_house",
+      "file": "sprites/giger_house.png",
+      "size": [56, 88],
+      "facing": "south facade / door on south",
+      "anchor": "feet",
+      "enterable": true,
+      "interior": "16x11 hut (flesh floor)",
+      "placement": "Fishing Village + West Hamlet"
+    },
+    {
+      "id": "mud_hut",
+      "file": "sprites/mud_hut.png",
+      "size": [64, 64],
+      "facing": "south facade / door on south",
+      "anchor": "feet",
+      "enterable": true,
+      "interior": "16x11 hut",
+      "placement": "Fishing Village + West Hamlet"
+    },
+    {
+      "id": "dark_tower",
+      "file": "sprites/dark_tower.png",
+      "size": [48, 96],
+      "facing": "south facade",
+      "anchor": "feet",
+      "enterable": true,
+      "interior": "16x11 tower",
+      "tiles": [[524, 141], [550, 166]]
+    },
+    {
+      "id": "bone_spire",
+      "file": "sprites/bone_spire.png",
+      "size": [40, 80],
+      "facing": "south",
+      "anchor": "feet",
+      "enterable": false,
+      "tiles": [[89, 128], [115, 153]]
+    },
+    {
+      "id": "lake_shop",
+      "file": "sprites/organic_house.png",
+      "size": [64, 80],
+      "facing": "south facade / door on south",
+      "anchor": "feet",
+      "enterable": true,
+      "interior": "16x11 shop (Cryptol). Only reachable when matchmaking is online and Lake Hali is drained.",
+      "tile": [204, 268],
+      "norm": [0.32, 0.42]
+    },
+    {
+      "id": "dungeon_entrance",
+      "file": "sprites/dungeon_entrance.png",
+      "size": [32, 32],
+      "frames": 2,
+      "facing": "south maw",
+      "anchor": "feet",
+      "enterable": true,
+      "notes": "Opens a real dungeon instance, not a house interior."
+    },
+    {
+      "id": "fishing_boat",
+      "file": "sprites/fishing_boat.png",
+      "size": [40, 24],
+      "facing": "hull along east-west, bow not encoded",
+      "anchor": "feet",
+      "tile": [300, 601]
+    },
+    {
+      "id": "wreck_boat",
+      "file": "sprites/wreck_boat.png",
+      "size": [48, 32],
+      "facing": "south / beached",
+      "anchor": "feet",
+      "placement": "southern docks, 8 wrecks along x≈294–315, y≈595"
+    },
+    {
+      "id": "dock_post",
+      "file": "sprites/dock_post.png",
+      "size": [24, 48],
+      "facing": "south piling",
+      "anchor": "feet",
+      "placement": "southern docks, 6 posts"
+    },
+    {
+      "id": "village_net",
+      "file": "sprites/village_net.png",
+      "size": [32, 32],
+      "facing": "south",
+      "anchor": "feet",
+      "tile": [345, 575]
+    }
+  ],
+  "tilesets": [
+    {
+      "id": "shore",
+      "file": "tilesets/shore_of_hali.png",
+      "columns": 8,
+      "usedFor": {
+        "1": "DeepWater (4 frames @ index 0)",
+        "2": "ShallowWater (4 frames @ index 8)",
+        "7": "Sand (4 variants @ index 16)",
+        "8": "Bridge (4 variants @ index 32)",
+        "15": "Mist (4 frames @ index 24)"
+      }
+    },
+    {
+      "id": "waste",
+      "file": "tilesets/the_waste.png",
+      "columns": 8,
+      "usedFor": {
+        "0": "Grass (4 variants @ index 0)",
+        "3": "Forest (4 variants @ index 16)",
+        "4": "Mountain (4 variants @ index 24)",
+        "14": "DarkGrass (4 variants @ index 8)"
+      }
+    },
+    {
+      "id": "ruined",
+      "file": "tilesets/ruined_carcosa.png",
+      "columns": 8,
+      "usedFor": {
+        "5": "Ruins (4 variants @ index 16)",
+        "6": "Path (4 variants @ index 0)",
+        "10": "Cobblestone (4 variants @ index 8)",
+        "23": "Ladder rungs overlay Path art @ index 0 (rails drawn in tile cache)"
+      }
+    },
+    {
+      "id": "palaces",
+      "file": "tilesets/yellow_palaces.png",
+      "columns": 8,
+      "usedFor": {
+        "9": "DungeonEntrance (4 frames @ index 20)",
+        "11": "Wall (4 variants @ index 8)",
+        "12": "Floor (4 variants @ index 0)",
+        "13": "Door (4 variants @ index 16)"
+      }
+    },
+    {
+      "id": "realms",
+      "file": "tilesets/carcosa_realms.png",
+      "columns": 8,
+      "usedFor": {
+        "16": "Desert (8 variants @ index 0)",
+        "17": "Swamp (8 variants @ index 8)",
+        "22": "Flesh (8 variants @ index 16)",
+        "20": "Ash (8 variants @ index 24)",
+        "19": "Snow (8 variants @ index 32)",
+        "21": "Palace (8 variants @ index 40)",
+        "18": "MountainPath (8 variants @ index 48)"
+      }
+    }
+  ],
+  "overworldTileTypes": [
+    { "id": 0, "name": "Grass", "walk": true, "palette": "chartreuse" },
+    { "id": 1, "name": "DeepWater", "walk": false, "palette": "teal" },
+    { "id": 2, "name": "ShallowWater", "walk": true, "palette": "teal" },
+    { "id": 3, "name": "Forest", "walk": false, "palette": "chartreuse", "southFace": true },
+    { "id": 4, "name": "Mountain", "walk": false, "palette": "gold", "southFace": true },
+    { "id": 5, "name": "Ruins", "walk": false, "palette": "gold", "southFace": true },
+    { "id": 6, "name": "Path", "walk": true, "palette": "gold" },
+    { "id": 7, "name": "Sand", "walk": true, "palette": "teal" },
+    { "id": 8, "name": "Bridge", "walk": true, "palette": "gold" },
+    { "id": 9, "name": "DungeonEntrance", "walk": true, "palette": "flesh" },
+    { "id": 10, "name": "Cobblestone", "walk": true, "palette": "gold" },
+    { "id": 11, "name": "Wall", "walk": false, "palette": "gold", "southFace": true },
+    { "id": 12, "name": "Floor", "walk": true, "palette": "gold" },
+    { "id": 13, "name": "Door", "walk": true, "palette": "gold", "notes": "Interior south-wall exit" },
+    { "id": 14, "name": "DarkGrass", "walk": true, "palette": "chartreuse" },
+    { "id": 15, "name": "Mist", "walk": true, "palette": "purple" },
+    { "id": 16, "name": "Desert", "walk": true, "palette": "crimson" },
+    { "id": 17, "name": "Swamp", "walk": true, "palette": "chartreuse" },
+    { "id": 18, "name": "MountainPath", "walk": true, "palette": "gold" },
+    { "id": 19, "name": "Snow", "walk": true, "palette": "purple" },
+    { "id": 20, "name": "Ash", "walk": true, "palette": "crimson" },
+    { "id": 21, "name": "Palace", "walk": true, "palette": "gold" },
+    { "id": 22, "name": "Flesh", "walk": true, "palette": "flesh" },
+    { "id": 23, "name": "Ladder", "walk": true, "palette": "gold", "move": "vertical only, no stamina" }
+  ],
+  "palettes": {
+    "gold": { "name": "Carcosa Gold & Black Ichor", "use": "palaces, brass, royal stone", "colors": ["#1A1208", "#2E2214", "#4A3A22", "#8B6B2E", "#C9A84C", "#E8D48B", "#3D1F0F", "#6B3A28", "#A67C52"] },
+    "flesh": { "name": "Giger Biomechanical Flesh", "use": "creatures, organic walls, wet interiors", "colors": ["#0D0505", "#1F0A0A", "#4A1515", "#8B2A2A", "#C45C4A", "#E8C8A0", "#A89070", "#5C3A2A", "#3A2820"] },
+    "purple": { "name": "Purple Dream / Non-Euclidean Chamber", "use": "mist, peaks sky, alien rooms", "colors": ["#0F0518", "#1E0F2E", "#3A1F5C", "#6B3A9E", "#9B6BC9", "#C9A8E0", "#2A4A3A", "#5C7A4A", "#8BA87A"] },
+    "teal": { "name": "Abyssal Teal & Black Water", "use": "lakes, sand, docks", "colors": ["#020810", "#0A1A22", "#1A3A4A", "#2A6A7A", "#4A9AAB", "#8AC8D8", "#1A2A28", "#3A4A42", "#6A8A7A"] },
+    "crimson": { "name": "Scorched Crimson Wastes", "use": "desert, ash, heat", "colors": ["#0A0404", "#1F0A0A", "#4A1510", "#8B2A18", "#C45A30", "#E8A060", "#3A2210", "#6B4A28", "#A87A50"] },
+    "chartreuse": { "name": "Sickly Chartreuse & Void", "use": "forest, swamp, grass", "colors": ["#0A0A05", "#1A1A0A", "#3A3A18", "#6B6B28", "#A8A84A", "#D8D88A", "#2A2210", "#5C4A28", "#8B7A50"] }
+  },
+  "world": {
+    "width": 640,
+    "height": 640,
+    "seed": 20240815,
+    "tileToNorm": "tile = round(norm * 639)",
+    "spawn": { "norm": [0.5, 0.85], "tile": [320, 543] },
+    "viewNotes": "Camera follows the local player. North of yNorm 0.16: parallax black-star sky + twin suns.",
+    "landmarks": [
+      { "name": "The Fishing Village", "type": "village", "norm": [0.5, 0.84], "tile": [320, 537] },
+      { "name": "West Hamlet", "type": "village", "norm": [0.18, 0.86], "tile": [115, 550] },
+      { "name": "Lake Hali", "type": "lake", "norm": [0.32, 0.42], "tile": [204, 268] },
+      { "name": "The Intact House", "type": "shop", "norm": [0.32, 0.42], "tile": [204, 268], "visibleWhen": "lakeDrained" },
+      { "name": "The Pallid Shore", "type": "shore", "norm": [0.32, 0.36], "tile": [204, 230] },
+      { "name": "The Waste", "type": "desert", "norm": [0.18, 0.4], "tile": [115, 256] },
+      { "name": "Marshes of Yhtill", "type": "swamp", "norm": [0.28, 0.58], "tile": [179, 371] },
+      { "name": "The Dark Forest", "type": "forest", "norm": [0.78, 0.52], "tile": [498, 332] },
+      { "name": "Ruins of the King in Yellow", "type": "ruins", "norm": [0.78, 0.34], "tile": [498, 217] },
+      { "name": "The Yellow Palaces", "type": "palace", "norm": [0.82, 0.24], "tile": [524, 153] },
+      { "name": "Court of the Dragon", "type": "ash", "norm": [0.14, 0.22], "tile": [89, 141] },
+      { "name": "Aldebaran Crossing", "type": "crossroads", "norm": [0.5, 0.46], "tile": [320, 294] },
+      { "name": "The Hyades Gate", "type": "gate", "norm": [0.22, 0.16], "tile": [141, 102] },
+      { "name": "Black Stars", "type": "peaks", "norm": [0.5, 0.04], "tile": [320, 26] },
+      { "name": "Dim Carcosa Approaches", "type": "canyon", "norm": [0.4, 0.18], "tile": [256, 115] },
+      { "name": "The Twin Suns Road", "type": "road", "norm": [0.5, 0.3], "tile": [320, 192] }
+    ],
+    "dungeonEntrances": [
+      { "name": "The Drowned Dock", "scenario": "warehouse", "norm": [0.52, 0.9], "tile": [332, 575] },
+      { "name": "Temple of Hali", "scenario": "temple", "norm": [0.78, 0.34], "tile": [498, 217] },
+      { "name": "Mountain Cave", "scenario": "mountain_cave", "norm": [0.5, 0.16], "tile": [320, 102] },
+      { "name": "Sunken Cyclopean Quay", "scenario": "warehouse", "norm": [0.7, 0.94], "tile": [447, 601] },
+      { "name": "Palace Crypt", "scenario": "temple", "norm": [0.82, 0.24], "tile": [524, 153] }
+    ],
+    "namedNpcs": [
+      { "id": "npc_cassilda", "name": "Cassilda", "sheet": "cultist_chanter.png", "region": "Fishing Village", "norm": [0.51, 0.86], "tile": [326, 550], "facing": "wanders; sheet D,L,R,U" },
+      { "id": "npc_widow", "name": "The Dock Widow", "sheet": "cultist_acolyte.png", "region": "West Hamlet", "norm": [0.18, 0.87], "tile": [115, 556], "facing": "wanders; sheet D,L,R,U" },
+      { "id": "npc_ferryman", "name": "Pallid Ferryman", "sheet": "cultist_torch.png", "region": "Pallid Shore", "norm": [0.32, 0.36], "tile": [204, 230], "facing": "wanders; sheet D,L,R,U" },
+      { "id": "npc_ashwalker", "name": "Ash Walker", "sheet": "cultist_dagger.png", "region": "The Waste", "norm": [0.18, 0.4], "tile": [115, 256], "facing": "wanders; sheet D,L,R,U" },
+      { "id": "npc_marsh", "name": "Marsh Whisperer", "sheet": "cultist_acolyte.png", "region": "Marshes of Yhtill", "norm": [0.28, 0.58], "tile": [179, 371], "facing": "wanders; sheet D,L,R,U" },
+      { "id": "npc_ranger", "name": "Hyades Ranger", "sheet": "cultist_shotgun.png", "region": "Dark Forest", "norm": [0.78, 0.52], "tile": [498, 332], "facing": "wanders; sheet D,L,R,U" },
+      { "id": "npc_priest", "name": "Pallid Priest", "sheet": "cultist_chanter.png", "region": "Yellow Palaces", "norm": [0.82, 0.26], "tile": [524, 166], "facing": "wanders; sheet D,L,R,U" },
+      { "id": "npc_hermit", "name": "Star Hermit", "sheet": "cultist_lightning.png", "region": "Black Stars / peaks", "norm": [0.5, 0.1], "tile": [320, 64], "facing": "wanders; sheet D,L,R,U" },
+      { "id": "npc_ember", "name": "Ember Cantor", "sheet": "cultist_torch.png", "region": "Court of the Dragon", "norm": [0.14, 0.22], "tile": [89, 141], "facing": "wanders; sheet D,L,R,U" },
+      { "id": "npc_shopkeep", "name": "The Intact Merchant", "sheet": "cultist_chanter.png", "region": "Lake island shop interior", "tile": "interior 8.5, 3.5", "facing": "south behind counter" }
+    ],
+    "ladders": {
+      "move": "X locked while standing on Ladder tiles. No stamina.",
+      "facingWhileClimbing": "use up/down walk rows (facing 3 / 0)",
+      "columnsNormX": [0.18, 0.36, 0.64, 0.88],
+      "plusScatteredSouthFaces": "north mountains y < 0.24"
+    }
+  },
+  "rawConceptSheets": [
+    { "file": "raw_assets/2Mw4x.jpg", "role": "concept / sampled into biome tiles and props (not a clean grid)" },
+    { "file": "raw_assets/EPeVf.jpg", "role": "concept / sampled into biome tiles and props" },
+    { "file": "raw_assets/VDIzw.jpg", "role": "concept / sampled into biome tiles and props" }
+  ]
+}

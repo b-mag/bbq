@@ -26,6 +26,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { OwPlayerState } from '@/lib/overworld-messages';
+import { normalizeFigure } from '@/lib/engine/sprites';
 
 export interface P2PStatus {
   peerId: string;
@@ -93,6 +94,7 @@ export function useP2POverworld(): UseP2POverworldReturn {
             status: p.status || 'exploring',
             partyId: p.partyId,
             isPartyLeader: p.isPartyLeader || false,
+            figure: normalizeFigure(p.figure),
           }));
           setPlayers(mapped);
           setLoading(false);

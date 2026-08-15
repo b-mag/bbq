@@ -56,6 +56,16 @@ public sealed class PeerIdentity
     public string DisplayName { get; set; } = "Unknown";
 
     /// <summary>
+    /// Cosmetic body id: "a", "b", or "c". Runtime only (saved on PlayerSave).
+    /// </summary>
+    [JsonIgnore]
+    public string Figure { get; set; } = "b";
+
+    /// <summary>Accepts only a/b/c; anything else (including empty) becomes b.</summary>
+    public static string NormalizeFigure(string? figure) =>
+        figure is "a" or "b" or "c" ? figure : "b";
+
+    /// <summary>
     /// The world shard this peer is currently part of.
     /// Used by other peers and the tracker to route connections.
     /// </summary>

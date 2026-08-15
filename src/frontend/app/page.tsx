@@ -6,6 +6,8 @@ import { useGameInput } from '@/hooks/useGameInput';
 import { GameMessage, MessageTypes, EntityState, SessionInfoPayload, GameEventPayload, createMessage } from '@/lib/messages';
 import { GameMap, decodeMap } from '@/lib/map';
 import { VisualEffectsSystem } from '@/lib/engine/effects';
+import { noteAttack } from '@/lib/engine/spriteAnim';
+import { normalizeFigure, type FigureId } from '@/lib/engine/sprites';
 import GameCanvas from '@/components/GameCanvas';
 import GameHUD from '@/components/GameHUD';
 import OverworldView from '@/components/OverworldView';
@@ -21,6 +23,7 @@ type AppState = 'connect' | 'overworld' | 'dungeon';
 export default function Home() {
   const [appState, setAppState] = useState<AppState>('connect');
   const [playerName, setPlayerName] = useState('');
+  const [playerFigure, setPlayerFigure] = useState<FigureId | ''>('');
   const [bootstrapping, setBootstrapping] = useState(true);
 
   // Dungeon state (used when in 'dungeon' mode)
@@ -50,6 +53,7 @@ export default function Home() {
     active: appState === 'dungeon' && ws.status === 'connected' && !chatFocused && !isSpectating,
     onFire: useCallback((x: number, y: number, angle: number) => {
       const fx = effectsSystemRef.current;
+      if (ws.playerId) noteAttack(`player_${ws.playerId}`);
       if (!fx) return;
       const localEntity = entities.find(e => e.id === `player_${ws.playerId}`);
       const playerClass = localEntity?.subType || '';
@@ -196,6 +200,7 @@ export default function Home() {
           const data = await res.json();
           if (!data.needsName && data.displayName) {
             setPlayerName(data.displayName);
+            if (data.figure) setPlayerFigure(normalizeFigure(data.figure));
             setAppState('overworld');
           }
         }
@@ -210,12 +215,12 @@ export default function Home() {
 
   // Enter overworld from connect screen
   const handleEnterOverworld = async () => {
-    if (!playerName.trim()) return;
+    if (!playerName.trim() || !playerFigure) return;
     try {
       await fetch('/api/p2p/name', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: playerName.trim() }),
+        body: JSON.stringify({ name: playerName.trim(), figure: playerFigure }),
       });
     } catch { /* proceed even if name POST fails */ }
     setAppState('overworld');
@@ -286,6 +291,7 @@ export default function Home() {
     return (
       <OverworldView
         playerName={playerName}
+        playerFigure={playerFigure || 'b'}
         onDisconnect={handleDisconnect}
         onEnterDungeon={handleEnterDungeon}
       />
@@ -322,6 +328,7 @@ export default function Home() {
           onCanvasReady={(canvas) => gameInput.inputHandler.setCanvas(canvas)}
           onEffectsReady={(fx) => { effectsSystemRef.current = fx; }}
           inputHandler={gameInput.inputHandler}
+          localFigure={playerFigure || 'b'}
         />
       </GameHUD>
     );
@@ -368,7 +375,7 @@ export default function Home() {
 
       <div style={{
         background: '#2a2218', border: '1px solid #4a3d2e', borderRadius: '8px',
-        padding: '1.5rem', width: '100%', maxWidth: '400px',
+        padding: '1.5rem', width: '100%', maxWidth: '460px',
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           <input
@@ -382,13 +389,59 @@ export default function Home() {
               padding: '0.6rem 0.75rem', color: '#e8dcc8', fontSize: '1rem', outline: 'none',
             }}
           />
+          <p style={{ color: '#9a8b74', fontSize: '0.85rem', margin: 0 }}>Choose your figure</p>
+          <style>{`
+            @keyframes carcosa-walk {
+              from { background-position: 0 0; }
+              to { background-position: -256px 0; }
+            }
+          `}</style>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {([
+              { id: 'a' as const, label: 'A' },
+              { id: 'b' as const, label: 'B' },
+              { id: 'c' as const, label: 'C' },
+            ]).map(opt => {
+              const selected = playerFigure === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setPlayerFigure(opt.id)}
+                  style={{
+                    flex: 1,
+                    background: selected ? '#3a3020' : '#1a1410',
+                    border: selected ? '1px solid #c9a84c' : '1px solid #4a3d2e',
+                    borderRadius: '4px',
+                    padding: '0.5rem 0.25rem',
+                    color: selected ? '#c9a84c' : '#9a8b74',
+                    cursor: 'pointer',
+                    fontFamily: 'Georgia, serif',
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  <div style={{
+                    width: 64, height: 64, margin: '0 auto 0.35rem',
+                    backgroundImage: `url(/assets/sprites/player_${opt.id}.png)`,
+                    backgroundSize: '256px 512px',
+                    backgroundPosition: '0 0',
+                    backgroundRepeat: 'no-repeat',
+                    imageRendering: 'pixelated',
+                    animation: selected ? 'carcosa-walk 0.55s steps(4) infinite' : undefined,
+                  }} />
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
           <button
             onClick={handleEnterOverworld}
-            disabled={!playerName.trim()}
+            disabled={!playerName.trim() || !playerFigure}
             style={{
               background: '#4a3d2e', border: '1px solid #c9a84c', borderRadius: '4px',
               padding: '0.6rem 1rem', color: '#c9a84c', cursor: 'pointer',
               fontSize: '1rem', fontFamily: 'Georgia, serif',
+              opacity: (!playerName.trim() || !playerFigure) ? 0.5 : 1,
             }}
           >
             Enter Carcosa

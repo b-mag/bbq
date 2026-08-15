@@ -84,6 +84,9 @@ public sealed class RemotePlayerState
     /// <summary>Whether this player is party leader.</summary>
     public bool IsPartyLeader { get; set; }
 
+    /// <summary>Cosmetic body id: a, b, or c.</summary>
+    public string Figure { get; set; } = "b";
+
     /// <summary>When this state was last updated (local clock).</summary>
     public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
 
@@ -195,6 +198,9 @@ public sealed class OverworldSync
         }
     }
 
+    /// <summary>Force a state broadcast (e.g. after name/figure is chosen).</summary>
+    public void MarkLocalDirty() => _localDirty = true;
+
     // =========================================================================
     // BROADCAST LOOP
     // =========================================================================
@@ -250,6 +256,7 @@ public sealed class OverworldSync
                         Status = _localStatus,
                         PartyId = _localPartyId,
                         IsPartyLeader = _localIsPartyLeader,
+                        Figure = PeerIdentity.NormalizeFigure(_localIdentity.Figure),
                         Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     }
                 };
@@ -351,6 +358,7 @@ public sealed class OverworldSync
                 Status = state.Status,
                 PartyId = state.PartyId,
                 IsPartyLeader = state.IsPartyLeader,
+                Figure = PeerIdentity.NormalizeFigure(state.Figure),
                 LastUpdated = DateTime.UtcNow,
                 RemoteTimestamp = state.Timestamp,
             },
@@ -365,6 +373,7 @@ public sealed class OverworldSync
                 existing.Status = state.Status;
                 existing.PartyId = state.PartyId;
                 existing.IsPartyLeader = state.IsPartyLeader;
+                existing.Figure = PeerIdentity.NormalizeFigure(state.Figure);
                 existing.LastUpdated = DateTime.UtcNow;
                 existing.RemoteTimestamp = state.Timestamp;
                 return existing;
@@ -408,6 +417,7 @@ public sealed class OverworldSync
                         Status = _localStatus,
                         PartyId = _localPartyId,
                         IsPartyLeader = _localIsPartyLeader,
+                        Figure = PeerIdentity.NormalizeFigure(_localIdentity.Figure),
                         Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     }
                 };
@@ -475,6 +485,7 @@ public sealed class OverworldSync
             Status = _localStatus,
             PartyId = _localPartyId,
             IsPartyLeader = _localIsPartyLeader,
+            Figure = PeerIdentity.NormalizeFigure(_localIdentity.Figure),
             LastUpdated = DateTime.UtcNow,
         });
 

@@ -275,6 +275,8 @@ var saveManager = app.Services.GetRequiredService<SaveManager>();
 var savedProgress = saveManager.CurrentData;
 if (!string.IsNullOrWhiteSpace(savedProgress.DisplayName))
     peerIdentity.DisplayName = savedProgress.DisplayName;
+if (!string.IsNullOrWhiteSpace(savedProgress.Figure))
+    peerIdentity.Figure = PeerIdentity.NormalizeFigure(savedProgress.Figure);
 
 // Ensure WorldId and PublicAddress are set before tracker registration
 var worldShard = app.Services.GetRequiredService<WorldShard>();
@@ -600,7 +602,8 @@ app.MapGet("/api/p2p/players", (OverworldSync sync) =>
 
     var result = sync.GetAllVisiblePlayers().Select(p => new P2PPlayerResponse(
         p.PeerId, p.DisplayName, p.X, p.Y, p.VelocityX, p.VelocityY,
-        p.Status, p.PartyId ?? "", p.IsPartyLeader)).ToArray();
+        p.Status, p.PartyId ?? "", p.IsPartyLeader,
+        PeerIdentity.NormalizeFigure(p.Figure))).ToArray();
     return Results.Ok(result);
 });
 
@@ -619,16 +622,22 @@ app.MapPost("/api/p2p/position", (P2PPositionUpdate update, OverworldSync sync, 
 });
 
 // Set the local player's display name (called by frontend after entering name)
-app.MapPost("/api/p2p/name", (P2PNameRequest request, PeerIdentity identity, SaveManager saves, OverworldCombatSync combat) =>
+app.MapPost("/api/p2p/name", (P2PNameRequest request, PeerIdentity identity, SaveManager saves, OverworldCombatSync combat, OverworldSync sync) =>
 {
     if (!string.IsNullOrWhiteSpace(request.Name))
     {
         identity.DisplayName = request.Name.Trim();
+        var figure = string.IsNullOrWhiteSpace(request.Figure)
+            ? identity.Figure
+            : PeerIdentity.NormalizeFigure(request.Figure);
+        identity.Figure = figure;
         var data = combat.BuildSaveData();
         data.DisplayName = identity.DisplayName;
+        data.Figure = figure;
         data.HasCompletedFirstRun = true;
         saves.Save(data);
-        Console.WriteLine($"[P2P:API] Player name set to: {identity.DisplayName}");
+        sync.MarkLocalDirty();
+        Console.WriteLine($"[P2P:API] Player name set to: {identity.DisplayName} ({figure})");
     }
     return Results.Ok();
 });
@@ -642,7 +651,8 @@ app.MapGet("/api/gameplay/bootstrap", (SaveManager saves, PeerIdentity identity)
         NeedsName: needsName,
         DisplayName: string.IsNullOrWhiteSpace(d.DisplayName) ? identity.DisplayName : d.DisplayName,
         OfflineMode: d.OfflineMode,
-        Level: d.Level));
+        Level: d.Level,
+        Figure: PeerIdentity.NormalizeFigure(string.IsNullOrWhiteSpace(d.Figure) ? identity.Figure : d.Figure)));
 });
 
 app.MapGet("/api/gameplay/settings", (SaveManager saves) =>
@@ -848,7 +858,7 @@ app.MapGet("/api/gameplay/enemies", (OverworldCombatSync combat) =>
     var enemies = combat.GetEnemiesForRendering();
     var entries = enemies.Select(e => new EnemyStateEntry(
         e.Id, e.SubType, e.X, e.Y, e.VelocityX, e.VelocityY,
-        e.Health, e.MaxHealth, e.IsAlive, e.TaggedBy)).ToArray();
+        e.Health, e.MaxHealth, e.IsAlive, e.TaggedBy, e.PrimaryFireCooldown)).ToArray();
     return Results.Ok(new EnemyListResponse(entries));
 });
 
@@ -971,6 +981,45 @@ app.MapPost("/api/gameplay/offer-to-flame", (OfferToFlameRequest request, Player
     data.PaleMarks += marks;
     saves.Save(data);
     return Results.Ok(new OfferToFlameResponse(true, marks, $"+{marks} Pale Marks"));
+});
+
+app.MapGet("/api/gameplay/world-atmosphere", (MatchmakingClient mm) =>
+    Results.Ok(new WorldAtmosphereResponse(mm.IsOnline, mm.IsOnline)));
+
+app.MapGet("/api/gameplay/shop", (CryptolStore cryptol, PeerIdentity identity) =>
+{
+    var balance = cryptol.GetBalance(identity.PeerId);
+    var items = CryptolShopCatalog.Items
+        .Select(listing =>
+        {
+            var def = ItemRegistry.GetItem(listing.ItemId);
+            return new ShopItemEntry(
+                listing.ItemId,
+                def?.Name ?? listing.ItemId,
+                def?.Description ?? "",
+                def?.Rarity.ToString() ?? "Common",
+                listing.Price);
+        })
+        .ToArray();
+    return Results.Ok(new ShopResponse(balance, items));
+});
+
+app.MapPost("/api/gameplay/shop/buy", (ShopBuyRequest request, CryptolStore cryptol, PeerIdentity identity, PlayerInventory inventory, OverworldCombatSync combat, SaveManager saves) =>
+{
+    var listing = CryptolShopCatalog.Items.FirstOrDefault(i => i.ItemId == request.ItemId);
+    if (listing == null)
+        return Results.Ok(new ShopBuyResponse(false, cryptol.GetBalance(identity.PeerId), "Unknown wares."));
+    if (!ItemRegistry.Exists(listing.ItemId))
+        return Results.Ok(new ShopBuyResponse(false, cryptol.GetBalance(identity.PeerId), "That relic is gone."));
+    if (!cryptol.TrySpend(identity.PeerId, listing.Price, out var balance))
+        return Results.Ok(new ShopBuyResponse(false, balance, "Not enough Cryptol."));
+    if (!inventory.AddItem(listing.ItemId, 1))
+    {
+        cryptol.AwardCryptol(identity.PeerId, listing.Price);
+        return Results.Ok(new ShopBuyResponse(false, cryptol.GetBalance(identity.PeerId), "Your pack is full."));
+    }
+    saves.Save(combat.BuildSaveData());
+    return Results.Ok(new ShopBuyResponse(true, balance, "The merchant nods."));
 });
 
 app.MapGet("/api/gameplay/dungeon", (DungeonInstanceManager dungeons) =>
@@ -1259,7 +1308,7 @@ internal record ShardSwitchRequest(string ShardId);
 // --- P2P API Response Types (required for AOT serialization — no anonymous objects) ---
 internal record P2PPlayerResponse(
     string Id, string Name, float X, float Y, float VelocityX, float VelocityY,
-    string Status, string PartyId, bool IsPartyLeader);
+    string Status, string PartyId, bool IsPartyLeader, string Figure);
 internal record P2PPeerInfo(string Id, string Name, int Latency);
 internal record P2PStatusResponse(
     string PeerId, string DisplayName, string WorldId, int PeerCount,
@@ -1274,7 +1323,7 @@ internal record P2PChatMessageResponse(string MessageId, string Channel, string 
 internal record P2PShardResponse(
     string ShardId, byte ShardIndex, int PlayerCount, int MaxPlayers, bool IsAtCapacity);
 internal record P2PPositionUpdate(float X, float Y, float VelocityX, float VelocityY);
-internal record P2PNameRequest(string Name);
+internal record P2PNameRequest(string Name, string? Figure);
 
 // =============================================================================
 // GAMEPLAY API TYPES (Phase B — Combat, Enemies, Player Stats)
@@ -1290,7 +1339,7 @@ internal record PlayerStatsResponse(
     int PrimaryCooldown, int SecondaryCooldown, int ShieldHp, bool IsShardHost,
     bool LoadoutLocked, string LastSavedAt);
 
-internal record BootstrapResponse(bool NeedsName, string DisplayName, bool OfflineMode, int Level);
+internal record BootstrapResponse(bool NeedsName, string DisplayName, bool OfflineMode, int Level, string Figure);
 internal record SettingsResponse(string DisplayName, bool OfflineMode, float MasterVolume, bool ShowGlyphOverlay, bool ShowFps, string LastSavedAt);
 internal record SettingsUpdateRequest(string? DisplayName, bool? OfflineMode, float? MasterVolume, bool? ShowGlyphOverlay, bool? ShowFps);
 internal record PartyResponse(string? PartyId, string? LeaderPeerId, string[] MemberPeerIds, string[] PendingInvitePeerIds);
@@ -1298,11 +1347,16 @@ internal record PartyInviteRequest(string TargetPeerId);
 internal record PartyAcceptRequest(string FromPeerId);
 internal record OfferToFlameRequest(int BackpackSlot);
 internal record OfferToFlameResponse(bool Success, int PaleMarksGained, string? Message);
+internal record WorldAtmosphereResponse(bool MatchmakingOnline, bool LakeDrained);
+internal record ShopItemEntry(string ItemId, string Name, string Description, string Rarity, int Price);
+internal record ShopResponse(int Balance, ShopItemEntry[] Items);
+internal record ShopBuyRequest(string ItemId);
+internal record ShopBuyResponse(bool Success, int Balance, string? Message);
 
 /// <summary>Single enemy entry for GET /api/gameplay/enemies response.</summary>
 internal record EnemyStateEntry(
     string Id, string SubType, float X, float Y, float VelocityX, float VelocityY,
-    int Health, int MaxHealth, bool IsAlive, string? TaggedBy);
+    int Health, int MaxHealth, bool IsAlive, string? TaggedBy, int AttackCooldown);
 
 /// <summary>Response for GET /api/gameplay/enemies.</summary>
 internal record EnemyListResponse(EnemyStateEntry[] Enemies);
@@ -1399,8 +1453,15 @@ internal record DungeonEnterResponse(bool Started, DungeonInstanceResponse? Inst
 [JsonSerializable(typeof(PartyAcceptRequest))]
 [JsonSerializable(typeof(OfferToFlameRequest))]
 [JsonSerializable(typeof(OfferToFlameResponse))]
+[JsonSerializable(typeof(WorldAtmosphereResponse))]
+[JsonSerializable(typeof(ShopItemEntry))]
+[JsonSerializable(typeof(ShopItemEntry[]))]
+[JsonSerializable(typeof(ShopResponse))]
+[JsonSerializable(typeof(ShopBuyRequest))]
+[JsonSerializable(typeof(ShopBuyResponse))]
 [JsonSerializable(typeof(List<AvailableSession>))]
 [JsonSerializable(typeof(AvailableSession))]
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal partial class AppJsonContext : JsonSerializerContext
 {
 }

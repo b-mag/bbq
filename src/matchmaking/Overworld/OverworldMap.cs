@@ -79,7 +79,15 @@ public sealed class OverworldMap
             OverworldTileType.Door => true,
             OverworldTileType.DarkGrass => true,
             OverworldTileType.Mist => true,
-            _ => false, // DeepWater, Forest, Mountain, Ruins, Wall = impassable
+            OverworldTileType.Desert => true,
+            OverworldTileType.Swamp => true,
+            OverworldTileType.MountainPath => true,
+            OverworldTileType.Snow => true,
+            OverworldTileType.Ash => true,
+            OverworldTileType.Palace => true,
+            OverworldTileType.Flesh => true,
+            OverworldTileType.Ladder => true,
+            _ => false,
         };
     }
 }
@@ -105,7 +113,7 @@ public sealed class Landmark
 /// </summary>
 public sealed class DungeonEntrance
 {
-    /// <summary>Display name (e.g., "The Warehouse", "Temple of Hali").</summary>
+    /// <summary>Display name (e.g., "The Drowned Dock", "Temple of Hali").</summary>
     public string Name { get; set; } = "";
     /// <summary>Tile X coordinate of the entrance.</summary>
     public int X { get; set; }

@@ -32,6 +32,14 @@ export enum OwTileType {
   Door = 13,
   DarkGrass = 14,
   Mist = 15,
+  Desert = 16,
+  Swamp = 17,
+  MountainPath = 18,
+  Snow = 19,
+  Ash = 20,
+  Palace = 21,
+  Flesh = 22,
+  Ladder = 23,
 }
 
 /**
@@ -53,18 +61,47 @@ export const OW_TILE_COLORS: Record<number, string> = {
   [OwTileType.Wall]: '#3a3530',          // Building walls
   [OwTileType.Floor]: '#4a4035',         // Interior floor
   [OwTileType.Door]: '#6a5030',          // Door wood
-  [OwTileType.DarkGrass]: '#2a4a22',     // Darker transition grass
-  [OwTileType.Mist]: '#4a5a5a',          // Misty gray-green
+  [OwTileType.DarkGrass]: '#2a4a22',
+  [OwTileType.Mist]: '#4a5a5a',
+  [OwTileType.Desert]: '#8a7048',
+  [OwTileType.Swamp]: '#1e3a22',
+  [OwTileType.MountainPath]: '#6a6058',
+  [OwTileType.Snow]: '#c8d0d8',
+  [OwTileType.Ash]: '#4a4038',
+  [OwTileType.Palace]: '#c9a84c',
+  [OwTileType.Flesh]: '#5a2030',
+  [OwTileType.Ladder]: '#6a5030',
 };
 
 /**
  * Decoded overworld map for client-side rendering and collision.
  */
+export interface OverworldPoint {
+  x: number;
+  y: number;
+}
+
 export interface OverworldGameMap {
   width: number;
   height: number;
   seed: number;
   tiles: Uint8Array;
+  /** Sand bar + island hidden under Hali until matchmaking is online. */
+  lakeDrained?: boolean;
+  lakeIsland?: OverworldPoint[];
+  drainCauseway?: OverworldPoint[];
+  lakeOverlay?: Set<string>;
+}
+
+function pointKey(x: number, y: number): string {
+  return `${x},${y}`;
+}
+
+export function buildLakeOverlay(map: OverworldGameMap): Set<string> {
+  const set = new Set<string>();
+  for (const p of map.lakeIsland || []) set.add(pointKey(p.x, p.y));
+  for (const p of map.drainCauseway || []) set.add(pointKey(p.x, p.y));
+  return set;
 }
 
 /**
@@ -91,6 +128,10 @@ export function getOwTile(map: OverworldGameMap, x: number, y: number): OwTileTy
   if (x < 0 || x >= map.width || y < 0 || y >= map.height) {
     return OwTileType.DeepWater;
   }
+  const overlay = map.lakeOverlay;
+  if (!map.lakeDrained && overlay?.has(pointKey(x, y))) {
+    return OwTileType.DeepWater;
+  }
   return map.tiles[y * map.width + x] as OwTileType;
 }
 
@@ -111,6 +152,14 @@ export function isOwWalkable(map: OverworldGameMap, x: number, y: number): boole
     case OwTileType.Door:
     case OwTileType.DarkGrass:
     case OwTileType.Mist:
+    case OwTileType.Desert:
+    case OwTileType.Swamp:
+    case OwTileType.MountainPath:
+    case OwTileType.Snow:
+    case OwTileType.Ash:
+    case OwTileType.Palace:
+    case OwTileType.Flesh:
+    case OwTileType.Ladder:
       return true;
     default:
       return false;

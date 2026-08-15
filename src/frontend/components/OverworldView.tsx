@@ -12,7 +12,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useOverworldInput } from '@/hooks/useOverworldInput';
 import { OwDungeonEntranceData, OwWorldObjectData, OwLandmarkData } from '@/lib/overworld-messages';
-import { OverworldGameMap, decodeOverworldMap } from '@/lib/overworld-map';
+import { OverworldGameMap, decodeOverworldMap, buildLakeOverlay } from '@/lib/overworld-map';
 import OverworldCanvas from './OverworldCanvas';
 import OverworldChat from './OverworldChat';
 import P2POverlay from './P2POverlay';
@@ -25,14 +25,19 @@ import SettingsPanel, { GameSettings } from './SettingsPanel';
 import InventoryPanel from './InventoryPanel';
 import AbilitySelectPanel from './AbilitySelectPanel';
 import FlameOfferingPanel from './FlameOfferingPanel';
+import DialoguePanel from './DialoguePanel';
+import CryptolShopPanel from './CryptolShopPanel';
 import SaveIndicator from './SaveIndicator';
 import { useP2POverworld } from '@/hooks/useP2POverworld';
 import { usePlayerStats } from '@/hooks/usePlayerStats';
 import { useOverworldEnemies } from '@/hooks/useOverworldEnemies';
 import { pushPanel, removePanel } from '@/lib/ui-stack';
+import { dialogueFor, ENTERABLE_BUILDINGS, NpcDialogue } from '@/lib/npc-dialogue';
+import { generateInterior, InteriorInstance, isInteriorExit } from '@/lib/interior';
 
 interface OverworldViewProps {
   playerName: string;
+  playerFigure?: string;
   onDisconnect: () => void;
   onEnterDungeon?: (data: { hostAddress: string; seed: number; scenario: string }) => void;
 }
@@ -55,7 +60,7 @@ function isAltarLandmark(lm: OwLandmarkData): boolean {
   return t.includes('altar') || n.includes('altar') || n.includes('meditation');
 }
 
-export default function OverworldView({ playerName, onDisconnect, onEnterDungeon }: OverworldViewProps) {
+export default function OverworldView({ playerName, playerFigure, onDisconnect, onEnterDungeon }: OverworldViewProps) {
   const [map, setMap] = useState<OverworldGameMap | null>(null);
   const [dungeonEntrances, setDungeonEntrances] = useState<OwDungeonEntranceData[]>([]);
   const [worldObjects, setWorldObjects] = useState<OwWorldObjectData[]>([]);
@@ -72,6 +77,12 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
   const [showInventory, setShowInventory] = useState(false);
   const [showAbilitySelect, setShowAbilitySelect] = useState(false);
   const [showFlameOffering, setShowFlameOffering] = useState(false);
+  const [showShop, setShowShop] = useState(false);
+  const [lakeDrained, setLakeDrained] = useState(false);
+  const [interior, setInterior] = useState<InteriorInstance | null>(null);
+  const [dialogue, setDialogue] = useState<{ key: string; data: NpcDialogue; page: number } | null>(null);
+  const [nearbyBuilding, setNearbyBuilding] = useState<OwWorldObjectData | null>(null);
+  const [nearbyNpc, setNearbyNpc] = useState<OwWorldObjectData | null>(null);
 
   const p2p = useP2POverworld();
   const stats = usePlayerStats();
@@ -84,16 +95,47 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
   const playersRef = useRef(p2p.players);
   playersRef.current = p2p.players;
   const declinedInvitesRef = useRef<Set<string>>(new Set());
-  const anyPanelOpen = showPauseMenu || showSettings || showInventory || showAbilitySelect || showFlameOffering;
+  const anyPanelOpen = showPauseMenu || showSettings || showInventory || showAbilitySelect || showFlameOffering || showShop || !!dialogue;
+
+  const activeMap = interior?.map ?? map;
+  const activeObjects = interior?.objects ?? worldObjects;
 
   const input = useOverworldInput({
     send: () => {},
-    map,
-    active: map !== null && !chatFocused && !anyPanelOpen,
-    worldObjects,
+    map: activeMap,
+    active: activeMap !== null && !chatFocused && !anyPanelOpen,
+    worldObjects: activeObjects,
   });
 
   const localId = p2p.status?.peerId ?? null;
+
+  const enterInterior = useCallback((obj: OwWorldObjectData) => {
+    if (obj.type === 'lake_shop' && !lakeDrained) return;
+    const inst = generateInterior(obj.type, obj.x, obj.y, input.position.x, input.position.y);
+    setInterior(inst);
+    input.setInitialPosition(inst.spawnX, inst.spawnY);
+    if (inst.kind === 'shop') {
+      setShowShop(true);
+      pushPanel('cryptol-shop');
+    }
+  }, [lakeDrained, input]);
+
+  const exitInterior = useCallback(() => {
+    if (!interior) return;
+    const retX = interior.returnX;
+    const retY = interior.returnY;
+    setInterior(null);
+    setShowShop(false);
+    removePanel('cryptol-shop');
+    input.setInitialPosition(retX, retY + 1.2);
+  }, [interior, input]);
+
+  const openDialogue = useCallback((obj: OwWorldObjectData) => {
+    const data = dialogueFor(obj.type);
+    if (!data) return;
+    setDialogue({ key: obj.type, data, page: 0 });
+    pushPanel('dialogue');
+  }, []);
 
   const openFlame = useCallback(() => {
     if (showFlameOffering) return;
@@ -121,7 +163,7 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          scenario: 'mountain_cave',
+          scenario: entrance?.scenario || 'mountain_cave',
           entranceX: entrance?.x ?? input.position.x,
           entranceY: entrance?.y ?? input.position.y,
         }),
@@ -153,12 +195,27 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
 
       if (e.key === 'Escape') {
         e.preventDefault();
-        if (showSettings) { setShowSettings(false); removePanel('settings'); }
+        if (dialogue) { setDialogue(null); removePanel('dialogue'); }
+        else if (showShop) { setShowShop(false); removePanel('cryptol-shop'); }
+        else if (showSettings) { setShowSettings(false); removePanel('settings'); }
         else if (showFlameOffering) { setShowFlameOffering(false); removePanel('flame-offering'); }
         else if (showInventory) { setShowInventory(false); removePanel('inventory'); }
         else if (showAbilitySelect) { setShowAbilitySelect(false); removePanel('ability-select'); }
+        else if (interior) { exitInterior(); }
         else if (showPauseMenu) { setShowPauseMenu(false); removePanel('pause-menu'); }
         else { setShowPauseMenu(true); pushPanel('pause-menu'); }
+        return;
+      }
+
+      if (dialogue) {
+        if (e.key === 'e' || e.key === 'E' || e.key === ' ') {
+          if (dialogue.page >= dialogue.data.lines.length - 1) {
+            setDialogue(null);
+            removePanel('dialogue');
+          } else {
+            setDialogue({ ...dialogue, page: dialogue.page + 1 });
+          }
+        }
         return;
       }
 
@@ -174,7 +231,18 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
       }
 
       if (e.key === 'e' || e.key === 'E') {
-        if (nearbyEntrance) {
+        if (interior) {
+          if (interior.kind === 'shop') {
+            setShowShop(true);
+            pushPanel('cryptol-shop');
+          } else {
+            exitInterior();
+          }
+        } else if (nearbyNpc) {
+          openDialogue(nearbyNpc);
+        } else if (nearbyBuilding) {
+          enterInterior(nearbyBuilding);
+        } else if (nearbyEntrance) {
           enterDungeon(nearbyEntrance);
         } else if (nearbyAltar) {
           openFlame();
@@ -186,7 +254,9 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     chatFocused, anyPanelOpen, showSettings, showFlameOffering, showInventory,
-    showAbilitySelect, showPauseMenu, nearbyEntrance, nearbyAltar, enterDungeon, openFlame,
+    showAbilitySelect, showPauseMenu, showShop, nearbyEntrance, nearbyAltar,
+    nearbyBuilding, nearbyNpc, interior, dialogue, enterDungeon, openFlame,
+    enterInterior, exitInterior, openDialogue,
   ]);
 
   // Load overworld map from local server REST API
@@ -196,7 +266,7 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
     fetch('/api/p2p/name', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: playerName }),
+      body: JSON.stringify({ name: playerName, figure: playerFigure || 'b' }),
     }).catch(() => {});
 
     const loadMap = async () => {
@@ -210,12 +280,22 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         const data = await res.json();
         if (data && data.tilesBase64) {
           const decoded = decodeOverworldMap(data);
+          decoded.lakeIsland = (data.lakeIsland || []).map((p: { x?: number; X?: number; y?: number; Y?: number }) => ({
+            x: p.x ?? p.X ?? 0,
+            y: p.y ?? p.Y ?? 0,
+          }));
+          decoded.drainCauseway = (data.drainCauseway || []).map((p: { x?: number; X?: number; y?: number; Y?: number }) => ({
+            x: p.x ?? p.X ?? 0,
+            y: p.y ?? p.Y ?? 0,
+          }));
+          decoded.lakeOverlay = buildLakeOverlay(decoded);
+          decoded.lakeDrained = false;
           setMap(decoded);
           setDungeonEntrances(data.dungeonEntrances || []);
           setWorldObjects(data.worldObjects || []);
           setLandmarks(data.landmarks || []);
-          const spawnX = data.spawnPoint?.x ? data.spawnPoint.x + 0.5 : 100.5;
-          const spawnY = data.spawnPoint?.y ? data.spawnPoint.y + 0.5 : 180.5;
+          const spawnX = data.spawnPoint?.x != null ? data.spawnPoint.x + 0.5 : 320.5;
+          const spawnY = data.spawnPoint?.y != null ? data.spawnPoint.y + 0.5 : 544.5;
           input.setInitialPosition(spawnX, spawnY);
           console.log(`[Overworld] Map loaded via REST: ${data.width}x${data.height}, spawn at (${spawnX}, ${spawnY})`);
         } else {
@@ -243,9 +323,17 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
       .catch(() => {});
   }, []);
 
-  // Nearby dungeon entrance / altar
+  // Nearby dungeon entrance / altar / building / NPC
   useEffect(() => {
     const pos = input.position;
+    if (interior) {
+      setNearbyEntrance(null);
+      setNearbyBuilding(null);
+      setNearbyNpc(interior.objects.find(o => o.type.startsWith('npc_')) || null);
+      setNearbyAltar(false);
+      return;
+    }
+
     const nearby = dungeonEntrances.find(e => {
       const dist = Math.sqrt((e.x - pos.x) ** 2 + (e.y - pos.y) ** 2);
       return dist < 2.5;
@@ -261,14 +349,62 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
       return Math.sqrt((lm.x - pos.x) ** 2 + (lm.y - pos.y) ** 2) < 2.5;
     });
     setNearbyAltar(altarObj || altarLm);
-  }, [input.position, dungeonEntrances, worldObjects, landmarks]);
+
+    const building = worldObjects.find(o => {
+      if (!ENTERABLE_BUILDINGS.has(o.type)) return false;
+      if (o.type === 'lake_shop' && !lakeDrained) return false;
+      const dx = pos.x - o.x;
+      const dy = pos.y - o.y;
+      const reach = (o.collisionRadius || 1.4) + 1.4;
+      return Math.abs(dx) < reach && dy > -0.2 && dy < reach;
+    });
+    setNearbyBuilding(building || null);
+
+    const npc = [...worldObjects, ...enemies.map(e => ({
+      type: e.subType,
+      x: e.x,
+      y: e.y,
+      collision: false,
+      collisionRadius: 0,
+    }))].find(o => {
+      if (!o.type.startsWith('npc_')) return false;
+      return Math.sqrt((o.x - pos.x) ** 2 + (o.y - pos.y) ** 2) < 1.8;
+    });
+    setNearbyNpc(npc || null);
+  }, [input.position, dungeonEntrances, worldObjects, landmarks, interior, lakeDrained, enemies]);
+
+  useEffect(() => {
+    if (!interior) return;
+    const { x, y } = input.position;
+    if (x < 0.4 || x >= interior.map.width - 0.4 || y < 0.4) return;
+    if (isInteriorExit(interior.map, x, y)) {
+      exitInterior();
+    }
+  }, [interior, input.position, exitInterior]);
+
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/gameplay/world-atmosphere');
+        if (!res.ok) return;
+        const data = await res.json();
+        const drained = !!data.lakeDrained;
+        setLakeDrained(drained);
+        setMap(m => m ? { ...m, lakeDrained: drained } : m);
+      } catch { /* ignore */ }
+    };
+    poll();
+    const id = setInterval(poll, 4000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     const pos = input.position;
+    if (interior) return;
     if (pos.x !== 0 || pos.y !== 0) {
-      p2p.updatePosition(pos.x, pos.y, 0, 0);
+      p2p.updatePosition(pos.x, pos.y, input.velocityX, input.velocityY);
     }
-  }, [input.position, p2p]);
+  }, [input.position, p2p, interior]);
 
   useEffect(() => {
     if (input.position.x === 0 && input.position.y === 0 && p2p.status) {
@@ -333,7 +469,14 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
 
   const displayPlayers = p2p.players.map(p => {
     if (localId && p.id === localId) {
-      return { ...p, x: input.position.x, y: input.position.y };
+      return {
+        ...p,
+        x: input.position.x,
+        y: input.position.y,
+        velocityX: input.velocityX,
+        velocityY: input.velocityY,
+        figure: playerFigure || p.figure,
+      };
     }
     return p;
   });
@@ -396,18 +539,21 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden', background: '#0d0f07' }}>
       <OverworldCanvas
-        map={map}
-        players={displayPlayers}
+        map={activeMap}
+        players={interior ? displayPlayers.filter(p => p.id === localId) : displayPlayers}
         localPlayerId={localId}
-        dungeonEntrances={dungeonEntrances}
-        worldObjects={worldObjects}
-        landmarks={landmarks}
-        enemies={enemies}
-        projectiles={projectiles}
-        lootDrops={lootDrops}
+        dungeonEntrances={interior ? [] : dungeonEntrances}
+        worldObjects={activeObjects}
+        landmarks={interior ? [] : landmarks}
+        enemies={interior ? [] : enemies}
+        projectiles={interior ? [] : projectiles}
+        lootDrops={interior ? [] : lootDrops}
         width={typeof window !== 'undefined' ? window.innerWidth : 1280}
         height={typeof window !== 'undefined' ? window.innerHeight : 720}
         onPlayerClick={handleInvitePlayer}
+        lakeDrained={lakeDrained}
+        combatEnabled={!interior}
+        interiorMode={!!interior}
       />
 
       <HealthBar hp={stats.hp} maxHp={stats.maxHp} level={stats.level} />
@@ -451,7 +597,7 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         </div>
       )}
 
-      {nearbyEntrance && (
+      {nearbyEntrance && !interior && (
         <div style={{
           position: 'absolute', bottom: 80, left: '50%', transform: 'translateX(-50%)',
           padding: '10px 20px', background: 'rgba(60, 20, 20, 0.9)',
@@ -463,7 +609,44 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
         </div>
       )}
 
-      {!nearbyEntrance && nearbyAltar && (
+      {!nearbyEntrance && !interior && nearbyBuilding && (
+        <div style={{
+          position: 'absolute', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+          padding: '10px 20px', background: 'rgba(26, 18, 8, 0.92)',
+          border: '1px solid #C9A84C', borderRadius: 6, color: '#e8dcc8',
+          textAlign: 'center', fontSize: '0.85rem',
+        }}>
+          <div style={{ color: '#C9A84C', fontWeight: 'bold' }}>
+            {nearbyBuilding.type === 'lake_shop' ? 'The Intact House' : 'A dwelling'}
+          </div>
+          <div style={{ color: '#9a8b74', marginTop: 4 }}>Press <strong>E</strong> to enter</div>
+        </div>
+      )}
+
+      {!nearbyEntrance && !nearbyBuilding && !interior && nearbyNpc && (
+        <div style={{
+          position: 'absolute', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+          padding: '10px 20px', background: 'rgba(15, 5, 24, 0.92)',
+          border: '1px solid #6B3A9E', borderRadius: 6, color: '#e8dcc8',
+          textAlign: 'center', fontSize: '0.85rem',
+        }}>
+          <div style={{ color: '#C9A8E0', fontWeight: 'bold' }}>{dialogueFor(nearbyNpc.type)?.name || 'Someone'}</div>
+          <div style={{ color: '#9a8b74', marginTop: 4 }}>Press <strong>E</strong> to speak</div>
+        </div>
+      )}
+
+      {interior && !dialogue && !showShop && (
+        <div style={{
+          position: 'absolute', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+          padding: '8px 16px', background: 'rgba(13, 10, 6, 0.85)',
+          border: '1px solid #4A3A22', borderRadius: 6, color: '#9a8b74',
+          textAlign: 'center', fontSize: '0.8rem',
+        }}>
+          {interior.title} — walk south through the door to leave
+        </div>
+      )}
+
+      {!nearbyEntrance && !nearbyBuilding && !nearbyNpc && nearbyAltar && !interior && (
         <div style={{
           position: 'absolute', bottom: 80, left: '50%', transform: 'translateX(-50%)',
           padding: '10px 20px', background: 'rgba(40, 20, 10, 0.9)',
@@ -556,6 +739,21 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
             removePanel('ability-select');
           }}
           onClose={() => { setShowAbilitySelect(false); removePanel('ability-select'); }}
+        />
+      )}
+
+      {dialogue && (
+        <DialoguePanel
+          dialogue={dialogue.data}
+          page={dialogue.page}
+          onAdvance={() => setDialogue(d => d ? { ...d, page: d.page + 1 } : d)}
+          onClose={() => { setDialogue(null); removePanel('dialogue'); }}
+        />
+      )}
+
+      {showShop && (
+        <CryptolShopPanel
+          onClose={() => { setShowShop(false); removePanel('cryptol-shop'); }}
         />
       )}
 

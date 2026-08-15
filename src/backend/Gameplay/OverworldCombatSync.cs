@@ -348,6 +348,8 @@ public sealed class OverworldCombatSync
             // Collision with enemies
             foreach (var enemy in _spawner.GetAliveEnemies())
             {
+                if (enemy.SubType.StartsWith("npc_", StringComparison.OrdinalIgnoreCase))
+                    continue;
                 float dx = enemy.X - proj.X;
                 float dy = enemy.Y - proj.Y;
                 float distSq = dx * dx + dy * dy;
@@ -682,6 +684,7 @@ public sealed class OverworldCombatSync
                 MaxHealth = entry.MaxHealth,
                 IsAlive = entry.IsAlive,
                 TaggedBy = entry.TaggedBy,
+                PrimaryFireCooldown = entry.AttackCooldown,
             };
             _enemyMirror[entry.Id] = entity;
         }
@@ -758,6 +761,7 @@ public sealed class OverworldCombatSync
             MaxHealth = e.MaxHealth,
             IsAlive = e.IsAlive,
             TaggedBy = e.TaggedBy,
+            AttackCooldown = e.PrimaryFireCooldown,
         }).ToArray();
 
         // Include active projectiles so non-host peers can render ability effects
@@ -871,6 +875,12 @@ public sealed class OverworldCombatSync
 
         var restoreX = data.WasInDungeon ? data.LastSafeOverworldX : data.LastX;
         var restoreY = data.WasInDungeon ? data.LastSafeOverworldY : data.LastY;
+        if (data.WorldWidth <= 200)
+        {
+            var scale = OverworldBootstrap.Width / 200f;
+            restoreX *= scale;
+            restoreY *= scale;
+        }
         _localPlayer.X = restoreX;
         _localPlayer.Y = restoreY;
         _overworldSync.UpdateLocalPosition(restoreX, restoreY, 0, 0);
@@ -892,6 +902,8 @@ public sealed class OverworldCombatSync
 
         if (!string.IsNullOrWhiteSpace(data.DisplayName))
             _localIdentity.DisplayName = data.DisplayName;
+        if (!string.IsNullOrWhiteSpace(data.Figure))
+            _localIdentity.Figure = data.Figure;
 
         Console.WriteLine($"[Save] Applied to combat: Lv{_localPlayer.Level} at ({restoreX:F1},{restoreY:F1})");
     }
@@ -909,6 +921,8 @@ public sealed class OverworldCombatSync
             DisplayName = string.IsNullOrWhiteSpace(_localIdentity.DisplayName)
                 ? existing.DisplayName
                 : _localIdentity.DisplayName,
+            Figure = PeerIdentity.NormalizeFigure(
+                string.IsNullOrWhiteSpace(_localIdentity.Figure) ? existing.Figure : _localIdentity.Figure),
             HasCompletedFirstRun = existing.HasCompletedFirstRun || !string.IsNullOrWhiteSpace(_localIdentity.DisplayName),
             OfflineMode = existing.OfflineMode,
             MasterVolume = existing.MasterVolume,
@@ -932,6 +946,7 @@ public sealed class OverworldCombatSync
             LastY = _localPlayer.Y,
             LastSafeOverworldX = existing.WasInDungeon ? existing.LastSafeOverworldX : _localPlayer.X,
             LastSafeOverworldY = existing.WasInDungeon ? existing.LastSafeOverworldY : _localPlayer.Y,
+            WorldWidth = OverworldBootstrap.Width,
             WasInDungeon = existing.WasInDungeon,
             CreatedAt = existing.CreatedAt == default ? DateTime.UtcNow : existing.CreatedAt,
             LastSavedAt = DateTime.UtcNow,

@@ -82,6 +82,7 @@ export interface EntityState {
   subType?: string;
   isAlive: boolean;
   medKits: number;
+  attackCooldown?: number;
 }
 
 export interface ChatMessagePayload {

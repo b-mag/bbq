@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { OverworldMessage, OwMessageTypes, OwPlayerInputPayload, OwWorldObjectData } from '@/lib/overworld-messages';
-import { OverworldGameMap, isOwWalkableF } from '@/lib/overworld-map';
+import { OverworldGameMap, OwTileType, isOwWalkableF, getOwTile } from '@/lib/overworld-map';
 
 const TICK_RATE = 20;
 const TICK_INTERVAL = 1000 / TICK_RATE;
@@ -32,6 +32,7 @@ export function useOverworldInput(options: UseOverworldInputOptions) {
   const { send, map, active, worldObjects } = options;
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const posRef = useRef({ x: 0, y: 0 });
+  const velRef = useRef({ x: 0, y: 0 });
   const keysRef = useRef<Set<string>>(new Set());
   const sequenceRef = useRef(0);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -107,6 +108,10 @@ export function useOverworldInput(options: UseOverworldInputOptions) {
       if (keys.has('a') || keys.has('arrowleft')) moveX = -1;
       if (keys.has('d') || keys.has('arrowright')) moveX = 1;
 
+      if (map && getOwTile(map, Math.floor(posRef.current.x), Math.floor(posRef.current.y)) === OwTileType.Ladder) {
+        moveX = 0;
+      }
+
       // Normalize diagonal
       if (moveX !== 0 && moveY !== 0) {
         const len = Math.sqrt(moveX * moveX + moveY * moveY);
@@ -119,6 +124,8 @@ export function useOverworldInput(options: UseOverworldInputOptions) {
       // Client-side prediction
       const dx = moveX * MOVE_PER_TICK;
       const dy = moveY * MOVE_PER_TICK;
+      const wasMoving = velRef.current.x !== 0 || velRef.current.y !== 0;
+      velRef.current = { x: dx, y: dy };
 
       if (dx !== 0 || dy !== 0) {
         let newX = posRef.current.x;
@@ -134,6 +141,8 @@ export function useOverworldInput(options: UseOverworldInputOptions) {
         posRef.current = { x: newX, y: newY };
         setPosition({ x: newX, y: newY });
         pendingInputsRef.current.push({ seq, dx, dy });
+      } else if (wasMoving) {
+        setPosition({ x: posRef.current.x, y: posRef.current.y });
       }
 
       // Only send input to server when there's movement or interaction
@@ -166,6 +175,8 @@ export function useOverworldInput(options: UseOverworldInputOptions) {
 
   return {
     position,
+    velocityX: velRef.current.x,
+    velocityY: velRef.current.y,
     setInitialPosition,
     reconcile,
   };

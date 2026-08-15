@@ -560,7 +560,7 @@ public static class OverworldGenerator
         {
             new()
             {
-                Name = "The Warehouse",
+                Name = "The Drowned Dock",
                 X = 105,
                 Y = 182,
                 Scenario = "warehouse",

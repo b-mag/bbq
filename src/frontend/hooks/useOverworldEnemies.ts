@@ -24,6 +24,7 @@ export interface EnemyState {
   maxHealth: number;
   isAlive: boolean;
   taggedBy: string | null;
+  attackCooldown?: number;
 }
 
 export interface ProjectileState {

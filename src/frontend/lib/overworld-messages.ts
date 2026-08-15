@@ -66,6 +66,7 @@ export interface OwPlayerState {
   status: 'exploring' | 'in_party' | 'in_dungeon';
   partyId?: string;
   isPartyLeader: boolean;
+  figure?: string;
 }
 
 export interface OwMapDataPayload {

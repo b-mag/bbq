@@ -148,6 +148,9 @@ public sealed class PeerStateUpdatePayload
     /// <summary>True if this player is their party's leader.</summary>
     public bool IsPartyLeader { get; set; }
 
+    /// <summary>Cosmetic body id: a, b, or c.</summary>
+    public string Figure { get; set; } = "b";
+
     /// <summary>Server tick when this state was generated (for ordering/validation).</summary>
     public long Timestamp { get; set; }
 }
@@ -487,6 +490,9 @@ public sealed class PeerEnemySyncEntry
 
     /// <summary>Peer ID of the player who tagged this enemy (for loot rights indicator).</summary>
     public string? TaggedBy { get; set; }
+
+    /// <summary>Remaining attack cooldown ticks (clients play attack frames on a rising edge).</summary>
+    public int AttackCooldown { get; set; }
 }
 
 /// <summary>

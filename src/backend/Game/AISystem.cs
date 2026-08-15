@@ -102,6 +102,7 @@ public sealed class AISystem
 
             brain.StateTicks++;
             if (brain.AttackCooldown > 0) brain.AttackCooldown--;
+            entity.PrimaryFireCooldown = brain.AttackCooldown;
 
             UpdateEnemy(state, entity, brain);
         }

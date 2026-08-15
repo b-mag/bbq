@@ -4,17 +4,20 @@
  * =============================================================================
  *
  * Renders the overworld map and all connected players. Reuses the existing
- * camera system for zoom/pan. Players are shown as colored circles.
- * World objects, landmarks, and dungeon entrances are rendered as distinct visuals.
+ * camera system for zoom/pan. Players and enemies use manifest sprites; tiles
+ * are chunk-cached so zooming out does not stall movement.
  * =============================================================================
  */
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
-import { Camera, createCamera, cameraFollow, worldToScreen, screenToWorld, getVisibleBounds, getEffectiveTileSize } from '@/lib/engine/camera';
+import { Camera, createCamera, cameraFollow, worldToScreen, screenToWorld, getVisibleBounds, getEffectiveTileSize, MIN_ZOOM, MAX_ZOOM } from '@/lib/engine/camera';
 import { OverworldGameMap, OwTileType, OW_TILE_COLORS, getOwTile } from '@/lib/overworld-map';
 import { OwPlayerState, OwDungeonEntranceData, OwWorldObjectData, OwLandmarkData } from '@/lib/overworld-messages';
-import { SpriteCache, initSprites } from '@/lib/engine/sprites';
+import { SpriteCache, initSprites, facingFromMotion, facingFromVelocity, playerSpriteName } from '@/lib/engine/sprites';
+import { walkDistance, isAttacking, attackElapsedMs, noteAttack, syncAttackFromCooldown } from '@/lib/engine/spriteAnim';
+import { TileAtlas, initTilesets } from '@/lib/engine/tilesets';
+import { OverworldTileCache } from '@/lib/engine/tileLayer';
 import { EnemyState, ProjectileState, LootDropState } from '@/hooks/useOverworldEnemies';
 
 interface OverworldCanvasProps {
@@ -30,23 +33,69 @@ interface OverworldCanvasProps {
   width: number;
   height: number;
   onPlayerClick?: (playerId: string) => void;
+  lakeDrained?: boolean;
+  combatEnabled?: boolean;
+  interiorMode?: boolean;
 }
 
 export default function OverworldCanvas({
-  map, players, localPlayerId, dungeonEntrances, worldObjects, landmarks, enemies, projectiles, lootDrops, width, height, onPlayerClick
+  map, players, localPlayerId, dungeonEntrances, worldObjects, landmarks, enemies, projectiles, lootDrops, width, height, onPlayerClick,
+  lakeDrained = false, combatEnabled = true, interiorMode = false,
 }: OverworldCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const cameraRef = useRef<Camera>(createCamera(width, height, 16));
+  const cameraRef = useRef<Camera>(createCamera(width, height, 32));
   const animFrameRef = useRef<number>(0);
   const spriteCacheRef = useRef<SpriteCache | null>(null);
+  const tileAtlasRef = useRef<TileAtlas | null>(null);
+  const tileCacheRef = useRef(new OverworldTileCache());
   const cameraInitializedRef = useRef(false);
+  const slashFxRef = useRef<Array<{ x: number; y: number; angle: number; start: number }>>([]);
 
-  // Load sprites on mount
+  const mapRef = useRef(map);
+  const playersRef = useRef(players);
+  const localIdRef = useRef(localPlayerId);
+  const entrancesRef = useRef(dungeonEntrances);
+  const objectsRef = useRef(worldObjects);
+  const landmarksRef = useRef(landmarks);
+  const enemiesRef = useRef(enemies);
+  const projectilesRef = useRef(projectiles);
+  const lootRef = useRef(lootDrops);
+  const lakeDrainedRef = useRef(lakeDrained);
+  const interiorRef = useRef(interiorMode);
+  mapRef.current = map;
+  playersRef.current = players;
+  localIdRef.current = localPlayerId;
+  entrancesRef.current = dungeonEntrances;
+  objectsRef.current = worldObjects;
+  landmarksRef.current = landmarks;
+  enemiesRef.current = enemies;
+  projectilesRef.current = projectiles;
+  lootRef.current = lootDrops;
+  lakeDrainedRef.current = lakeDrained;
+  interiorRef.current = interiorMode;
+
   useEffect(() => {
     initSprites().then(cache => {
       spriteCacheRef.current = cache;
     });
+    initTilesets().then(atlas => {
+      tileAtlasRef.current = atlas;
+      tileCacheRef.current.invalidate();
+    });
+    cameraRef.current.zoom = 1.2;
   }, []);
+
+  useEffect(() => {
+    cameraRef.current.zoom = interiorMode ? 1.7 : 1.2;
+    cameraInitializedRef.current = false;
+    tileCacheRef.current.invalidate();
+  }, [interiorMode]);
+
+  useEffect(() => {
+    cameraRef.current.viewportWidth = width;
+    cameraRef.current.viewportHeight = height;
+    cameraRef.current.tileSize = 32;
+  }, [width, height]);
 
   // Render loop
   const render = useCallback(() => {
@@ -56,68 +105,99 @@ export default function OverworldCanvas({
     if (!ctx) return;
 
     const camera = cameraRef.current;
+    const mapNow = mapRef.current;
+    const playersNow = playersRef.current;
+    const localId = localIdRef.current;
+    const dungeonEntrancesNow = entrancesRef.current;
+    const worldObjectsNow = objectsRef.current;
+    const landmarksNow = landmarksRef.current;
+    const enemiesNow = enemiesRef.current;
+    const projectilesNow = projectilesRef.current;
+    const lootNow = lootRef.current;
+    const lakeDrainedNow = lakeDrainedRef.current;
+    const interiorNow = interiorRef.current;
 
-    // Follow local player
-    const localPlayer = players.find(p => p.id === localPlayerId);
+    const localPlayer = playersNow.find(p => p.id === localId);
     if (localPlayer) {
       if (!cameraInitializedRef.current && (localPlayer.x !== 0 || localPlayer.y !== 0)) {
-        // SNAP camera to player on first valid frame (no lerp)
         camera.x = localPlayer.x;
         camera.y = localPlayer.y;
         cameraInitializedRef.current = true;
       } else {
-        // Smooth follow after initial snap
         cameraFollow(camera, localPlayer.x, localPlayer.y, 0.12);
       }
     }
 
-    // Clear
-    ctx.fillStyle = '#0d0f07';
-    ctx.fillRect(0, 0, width, height);
+    ctx.imageSmoothingEnabled = false;
+    drawRegionBackdrop(ctx, camera, localPlayer, mapNow, width, height);
 
-    // Render map tiles
-    if (map) {
-      renderMapTiles(ctx, camera, map);
+    const nowMs = Date.now();
+
+    if (mapNow) {
+      tileCacheRef.current.draw(ctx, camera, mapNow, tileAtlasRef.current, nowMs);
     }
 
-    // Render dungeon entrances
-    renderDungeonEntrances(ctx, camera, dungeonEntrances);
-
-    // Render world objects
-    renderWorldObjects(ctx, camera, worldObjects, spriteCacheRef.current);
-
-    // Render loot drops on ground (colored squares with glow)
-    for (const drop of lootDrops) {
+    for (const drop of lootNow) {
       renderLootDrop(ctx, camera, drop);
     }
 
-    // Render players (Y-sorted for depth)
-    const sortedPlayers = [...players].sort((a, b) => a.y - b.y);
-    for (const player of sortedPlayers) {
+    const sprites = spriteCacheRef.current;
+    const drawables: Array<{ y: number; draw: () => void }> = [];
+
+    if (!interiorNow) {
+      for (const entrance of dungeonEntrancesNow) {
+        drawables.push({
+          y: entrance.y,
+          draw: () => renderDungeonEntrances(ctx, camera, [entrance], sprites, nowMs),
+        });
+      }
+    }
+
+    const visibleObjects = worldObjectsNow.filter(o => lakeDrainedNow || o.type !== 'lake_shop');
+    for (const obj of visibleObjects) {
+      const wander = obj.type.startsWith('npc_') ? npcWander(obj, nowMs) : { x: obj.x, y: obj.y };
+      drawables.push({
+        y: wander.y,
+        draw: () => renderWorldObject(ctx, camera, { ...obj, x: wander.x, y: wander.y }, sprites),
+      });
+    }
+
+    for (const player of playersNow) {
       if (player.status === 'in_dungeon') continue;
-      renderPlayer(ctx, camera, player, player.id === localPlayerId);
+      const facing = facingFromMotion(player.id, player.velocityX, player.velocityY);
+      drawables.push({
+        y: player.y,
+        draw: () => renderPlayer(ctx, camera, player, player.id === localId, sprites, nowMs, facing),
+      });
     }
 
-    // Render enemies (Y-sorted, mixed with players for depth)
-    for (const enemy of enemies) {
-      renderEnemy(ctx, camera, enemy);
+    if (!interiorNow) {
+      for (const enemy of enemiesNow) {
+        drawables.push({
+          y: enemy.y,
+          draw: () => renderEnemy(ctx, camera, enemy, sprites, nowMs),
+        });
+      }
     }
 
-    // Render projectiles
-    for (const proj of projectiles) {
-      renderProjectile(ctx, camera, proj);
+    drawables.sort((a, b) => a.y - b.y);
+    for (const d of drawables) d.draw();
+
+    if (!interiorNow) {
+      for (const proj of projectilesNow) {
+        renderProjectile(ctx, camera, proj);
+      }
+      renderSlashFx(ctx, camera, slashFxRef.current, nowMs);
     }
 
-    // Render landmark labels (only nearby ones)
     if (localPlayer) {
-      renderLandmarkLabels(ctx, camera, landmarks, localPlayer.x, localPlayer.y);
+      renderLandmarkLabels(ctx, camera, landmarksNow, localPlayer.x, localPlayer.y);
     }
 
-    // Vignette
     renderVignette(ctx, width, height);
 
     animFrameRef.current = requestAnimationFrame(render);
-  }, [map, players, localPlayerId, dungeonEntrances, worldObjects, landmarks, enemies, projectiles, lootDrops, width, height]);
+  }, [width, height]);
 
   useEffect(() => {
     animFrameRef.current = requestAnimationFrame(render);
@@ -132,7 +212,8 @@ export default function OverworldCanvas({
       e.preventDefault();
       const camera = cameraRef.current;
       const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      camera.zoom = Math.max(0.5, Math.min(3.0, camera.zoom + delta));
+      camera.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom + delta));
+      tileCacheRef.current.invalidate();
     };
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', handleWheel);
@@ -161,7 +242,7 @@ export default function OverworldCanvas({
       }
 
       // Not a player click — fire primary ability toward cursor
-      if (e.button === 0) {
+      if (e.button === 0 && combatEnabled) {
         const localPlayer = players.find(p => p.id === localPlayerId);
         if (localPlayer) {
           const aimAngle = Math.atan2(world.y - localPlayer.y, world.x - localPlayer.x);
@@ -170,6 +251,10 @@ export default function OverworldCanvas({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ abilitySlot: 'primary', aimAngle }),
           }).catch(() => {});
+          if (localPlayerId) {
+            noteAttack(localPlayerId);
+            slashFxRef.current.push({ x: localPlayer.x, y: localPlayer.y, angle: aimAngle, start: performance.now() });
+          }
         }
       }
     };
@@ -184,13 +269,17 @@ export default function OverworldCanvas({
       const world = screenToWorld(camera, screenX, screenY);
 
       const localPlayer = players.find(p => p.id === localPlayerId);
-      if (localPlayer) {
+      if (localPlayer && combatEnabled) {
         const aimAngle = Math.atan2(world.y - localPlayer.y, world.x - localPlayer.x);
         fetch('/api/gameplay/combat-action', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ abilitySlot: 'secondary', aimAngle }),
         }).catch(() => {});
+        if (localPlayerId) {
+          noteAttack(localPlayerId);
+          slashFxRef.current.push({ x: localPlayer.x, y: localPlayer.y, angle: aimAngle, start: performance.now() });
+        }
       }
     };
 
@@ -200,14 +289,14 @@ export default function OverworldCanvas({
       canvas.removeEventListener('click', handleClick);
       canvas.removeEventListener('contextmenu', handleContextMenu);
     };
-  }, [players, localPlayerId, onPlayerClick]);
+  }, [players, localPlayerId, onPlayerClick, combatEnabled]);
 
   return (
     <canvas
       ref={canvasRef}
       width={width}
       height={height}
-      style={{ display: 'block', background: '#0d0f07' }}
+      style={{ display: 'block', background: '#0d0f07', imageRendering: 'pixelated' }}
     />
   );
 }
@@ -216,7 +305,113 @@ export default function OverworldCanvas({
 // Rendering functions
 // =============================================================================
 
-function renderMapTiles(ctx: CanvasRenderingContext2D, camera: Camera, map: OverworldGameMap) {
+function drawRegionBackdrop(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  localPlayer: OwPlayerState | undefined,
+  map: OverworldGameMap | null,
+  width: number,
+  height: number
+) {
+  const yNorm = map && localPlayer ? localPlayer.y / map.height : 0.5;
+  const xNorm = map && localPlayer ? localPlayer.x / map.width : 0.5;
+  let top = '#0d0f07';
+  let bot = '#0a0c06';
+  if (yNorm < 0.16) {
+    top = '#05040a';
+    bot = '#120c18';
+  } else if (yNorm > 0.88) {
+    top = '#0a1018';
+    bot = '#061018';
+  } else if (xNorm < 0.32 && yNorm > 0.28 && yNorm < 0.55) {
+    top = '#1a1408';
+    bot = '#2a1c0c';
+  } else if (xNorm < 0.42 && yNorm > 0.48 && yNorm < 0.68) {
+    top = '#0a120c';
+    bot = '#08140e';
+  }
+
+  const g = ctx.createLinearGradient(0, 0, 0, height);
+  g.addColorStop(0, top);
+  g.addColorStop(1, bot);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, width, height);
+
+    if (yNorm < 0.16) {
+      const t = Date.now() * 0.00015;
+      const parX = camera.x * 8;
+      ctx.fillStyle = '#e8e0d0';
+      for (let layer = 0; layer < 3; layer++) {
+        const drift = parX * (0.12 + layer * 0.08) + t * (20 + layer * 14);
+        const count = 28 + layer * 16;
+        ctx.globalAlpha = 0.22 + layer * 0.12;
+        for (let i = 0; i < count; i++) {
+          const n = Math.sin((i * 19.17 + layer * 8) * 12.9898) * 43758.5453;
+          const m = Math.sin((i * 37.91 + layer * 3) * 78.233) * 23421.123;
+          const sx = ((n - Math.floor(n)) * width * 1.4 + drift) % width;
+          const sy = (m - Math.floor(m)) * height * (0.42 + layer * 0.08);
+          const r = layer === 0 && i % 9 === 0 ? 1.8 : 0.55 + layer * 0.25;
+          ctx.beginPath();
+          ctx.arc(sx < 0 ? sx + width : sx, sy, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = '#9B6BC9';
+      ctx.beginPath();
+      ctx.arc(width * 0.72 - (camera.x * 0.4) % 40, height * 0.18, 18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#C45A30';
+      ctx.beginPath();
+      ctx.arc(width * 0.78 - (camera.x * 0.35) % 40, height * 0.22, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(20, 0, 8, 0.28)';
+      ctx.fillRect(0, 0, width, height * 0.22);
+    }
+  }
+
+function renderSlashFx(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  fx: Array<{ x: number; y: number; angle: number; start: number }>,
+  _nowMs: number
+) {
+  const now = performance.now();
+  const tileSize = getEffectiveTileSize(camera);
+  for (let i = fx.length - 1; i >= 0; i--) {
+    const e = fx[i];
+    const t = (now - e.start) / 220;
+    if (t >= 1) {
+      fx.splice(i, 1);
+      continue;
+    }
+    const screen = worldToScreen(camera, e.x, e.y);
+    const alpha = 1 - t;
+    ctx.save();
+    ctx.translate(screen.x, screen.y);
+    ctx.strokeStyle = `rgba(230, 220, 200, ${alpha * 0.95})`;
+    ctx.lineWidth = Math.max(2, tileSize * 0.08);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(0, 0, tileSize * 0.7, e.angle - 0.7, e.angle + 0.7);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(255, 240, 180, ${alpha * 0.5})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, tileSize * 0.55, e.angle - 0.5, e.angle + 0.5);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function renderMapTiles(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  map: OverworldGameMap,
+  atlas: TileAtlas | null,
+  nowMs: number
+) {
   const bounds = getVisibleBounds(camera);
   const tileSize = getEffectiveTileSize(camera);
 
@@ -230,64 +425,53 @@ function renderMapTiles(ctx: CanvasRenderingContext2D, camera: Camera, map: Over
       const tile = getOwTile(map, x, y);
       const screen = worldToScreen(camera, x, y);
 
-      ctx.fillStyle = OW_TILE_COLORS[tile] || OW_TILE_COLORS[OwTileType.Grass];
-      ctx.fillRect(Math.floor(screen.x), Math.floor(screen.y), tileSize + 1, tileSize + 1);
+      const drawn = atlas?.drawOverworldTile(
+        ctx, tile, x, y, screen.x, screen.y, tileSize, nowMs,
+        (dx, dy) => getOwTile(map, x + dx, y + dy)
+      ) ?? false;
 
-      // Subtle grid for paths/cobblestone
-      if (tile === OwTileType.Path || tile === OwTileType.Cobblestone) {
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
-        ctx.lineWidth = 0.5;
-        ctx.strokeRect(Math.floor(screen.x), Math.floor(screen.y), tileSize, tileSize);
-      }
-
-      // Water shimmer
-      if (tile === OwTileType.DeepWater || tile === OwTileType.ShallowWater) {
-        const shimmer = Math.sin(Date.now() * 0.0008 + x * 0.4 + y * 0.3) * 0.08;
-        ctx.fillStyle = `rgba(100, 160, 200, ${0.03 + shimmer})`;
-        ctx.fillRect(Math.floor(screen.x), Math.floor(screen.y), tileSize + 1, tileSize + 1);
-      }
-
-      // Mist animation
-      if (tile === OwTileType.Mist) {
-        const mistAlpha = 0.1 + Math.sin(Date.now() * 0.001 + x * 0.2 + y * 0.3) * 0.05;
-        ctx.fillStyle = `rgba(180, 200, 210, ${mistAlpha})`;
-        ctx.fillRect(Math.floor(screen.x), Math.floor(screen.y), tileSize + 1, tileSize + 1);
-      }
-
-      // Mountain depth shading
-      if (tile === OwTileType.Mountain) {
-        const shade = Math.sin(x * 0.3 + y * 0.5) * 0.05;
-        ctx.fillStyle = `rgba(0, 0, 0, ${0.1 + shade})`;
+      if (!drawn) {
+        ctx.fillStyle = OW_TILE_COLORS[tile] || OW_TILE_COLORS[OwTileType.Grass];
         ctx.fillRect(Math.floor(screen.x), Math.floor(screen.y), tileSize + 1, tileSize + 1);
       }
     }
   }
 }
 
-function renderDungeonEntrances(ctx: CanvasRenderingContext2D, camera: Camera, entrances: OwDungeonEntranceData[]) {
+function renderDungeonEntrances(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  entrances: OwDungeonEntranceData[],
+  spriteCache: SpriteCache | null,
+  nowMs: number
+) {
   const tileSize = getEffectiveTileSize(camera);
 
   for (const entrance of entrances) {
     const screen = worldToScreen(camera, entrance.x, entrance.y);
     const size = tileSize * 1.2;
+    const pulse = 0.5 + Math.sin(nowMs * 0.003) * 0.3;
 
-    // Pulsing glow
-    const pulse = 0.5 + Math.sin(Date.now() * 0.003) * 0.3;
+    const drawn = spriteCache?.drawSprite(
+      ctx, 'dungeon_entrance',
+      screen.x, screen.y,
+      tileSize,
+      { anchor: 'feet' }
+    ) ?? false;
 
-    // Dark entrance portal
-    ctx.fillStyle = `rgba(60, 20, 20, ${0.8 + pulse * 0.2})`;
-    ctx.beginPath();
-    ctx.arc(screen.x + tileSize / 2, screen.y + tileSize / 2, size / 2, 0, Math.PI * 2);
-    ctx.fill();
+    if (!drawn) {
+      ctx.fillStyle = `rgba(60, 20, 20, ${0.8 + pulse * 0.2})`;
+      ctx.beginPath();
+      ctx.arc(screen.x + tileSize / 2, screen.y + tileSize / 2, size / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
-    // Glow ring
     ctx.strokeStyle = `rgba(200, 100, 50, ${pulse * 0.6})`;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(screen.x + tileSize / 2, screen.y + tileSize / 2, size / 2 + 2, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Label
     ctx.fillStyle = `rgba(200, 168, 76, ${0.7 + pulse * 0.3})`;
     ctx.font = `${Math.max(8, tileSize * 0.4)}px Georgia, serif`;
     ctx.textAlign = 'center';
@@ -295,89 +479,90 @@ function renderDungeonEntrances(ctx: CanvasRenderingContext2D, camera: Camera, e
   }
 }
 
-function renderWorldObjects(ctx: CanvasRenderingContext2D, camera: Camera, objects: OwWorldObjectData[], spriteCache: SpriteCache | null) {
+function npcWander(obj: OwWorldObjectData, nowMs: number): { x: number; y: number } {
+  const phase = nowMs * 0.00035 + obj.x * 1.7 + obj.y * 0.9;
+  return {
+    x: obj.x + Math.sin(phase) * 0.35,
+    y: obj.y + Math.cos(phase * 0.8) * 0.22,
+  };
+}
+
+function renderWorldObject(ctx: CanvasRenderingContext2D, camera: Camera, obj: OwWorldObjectData, spriteCache: SpriteCache | null) {
   const tileSize = getEffectiveTileSize(camera);
-  const tick = Date.now(); // Use wall clock for animation timing
+  const screen = worldToScreen(camera, obj.x, obj.y);
+  const facing = obj.type.startsWith('npc_')
+    ? facingFromVelocity(Math.cos(obj.x + Date.now() * 0.0003), Math.sin(obj.y + Date.now() * 0.00025))
+    : 0;
 
-  for (const obj of objects) {
-    const screen = worldToScreen(camera, obj.x, obj.y);
+  if (spriteCache && (spriteCache.hasSprite(obj.type) || spriteCache.getEntry(obj.type))) {
+    spriteCache.drawSprite(ctx, obj.type, screen.x, screen.y, tileSize, {
+      action: obj.type.startsWith('npc_') ? 'walk' : 'idle',
+      facing,
+      distance: obj.type.startsWith('npc_') ? (Date.now() * 0.002 + obj.x) : undefined,
+      anchor: 'feet',
+    });
+    return;
+  }
 
-    // Try sprite rendering first
-    if (spriteCache && spriteCache.hasSprite(obj.type)) {
-      spriteCache.drawSprite(ctx, obj.type, screen.x + tileSize / 2, screen.y + tileSize / 2, tileSize, tick);
-      continue;
-    }
-
-    // Try placeholder from manifest (correct size even without PNG)
-    if (spriteCache && spriteCache.getEntry(obj.type)) {
-      spriteCache.drawSprite(ctx, obj.type, screen.x + tileSize / 2, screen.y + tileSize / 2, tileSize, tick);
-      continue;
-    }
-
-    // Fallback: hardcoded shape rendering (legacy)
-    switch (obj.type) {
-      case 'tree':
-        ctx.fillStyle = '#2a5a1a';
-        ctx.beginPath();
-        ctx.arc(screen.x + tileSize / 2, screen.y + tileSize * 0.3, tileSize * 0.4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#4a3a1a';
-        ctx.fillRect(screen.x + tileSize * 0.4, screen.y + tileSize * 0.5, tileSize * 0.2, tileSize * 0.4);
-        break;
-
-      case 'ruined_pillar':
-        ctx.fillStyle = '#6a6a60';
-        ctx.fillRect(screen.x + tileSize * 0.3, screen.y + tileSize * 0.1, tileSize * 0.4, tileSize * 0.8);
-        ctx.strokeStyle = '#4a4a40';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(screen.x + tileSize * 0.3, screen.y + tileSize * 0.1, tileSize * 0.4, tileSize * 0.8);
-        break;
-
-      case 'fishing_boat':
-        ctx.fillStyle = '#6a5030';
-        ctx.beginPath();
-        ctx.ellipse(screen.x + tileSize / 2, screen.y + tileSize / 2, tileSize * 0.4, tileSize * 0.2, 0, 0, Math.PI * 2);
-        ctx.fill();
-        break;
-
-      case 'signpost':
-        ctx.fillStyle = '#5a4020';
-        ctx.fillRect(screen.x + tileSize * 0.45, screen.y + tileSize * 0.3, tileSize * 0.1, tileSize * 0.5);
-        ctx.fillStyle = '#7a6040';
-        ctx.fillRect(screen.x + tileSize * 0.2, screen.y + tileSize * 0.2, tileSize * 0.6, tileSize * 0.25);
-        break;
-
-      default:
-        ctx.fillStyle = '#5a5a5a';
-        ctx.fillRect(screen.x + tileSize * 0.2, screen.y + tileSize * 0.2, tileSize * 0.6, tileSize * 0.6);
-        break;
-    }
+  switch (obj.type) {
+    case 'tree':
+      ctx.fillStyle = '#2a5a1a';
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - tileSize * 0.45, tileSize * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#4a3a1a';
+      ctx.fillRect(screen.x - tileSize * 0.08, screen.y - tileSize * 0.25, tileSize * 0.16, tileSize * 0.25);
+      break;
+    default:
+      ctx.fillStyle = '#5a5a5a';
+      ctx.fillRect(screen.x - tileSize * 0.3, screen.y - tileSize * 0.6, tileSize * 0.6, tileSize * 0.6);
+      break;
   }
 }
 
-function renderPlayer(ctx: CanvasRenderingContext2D, camera: Camera, player: OwPlayerState, isLocal: boolean) {
+function renderPlayer(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  player: OwPlayerState,
+  isLocal: boolean,
+  spriteCache: SpriteCache | null,
+  nowMs: number,
+  facing: number
+) {
   const screen = worldToScreen(camera, player.x, player.y);
   const tileSize = getEffectiveTileSize(camera);
   const radius = tileSize * 0.35;
+  const moving = player.velocityX !== 0 || player.velocityY !== 0;
+  const spriteName = playerSpriteName(player.figure);
+  const dist = walkDistance(player.id, player.x, player.y);
+  const attacking = isAttacking(player.id);
+  const attackMs = attackElapsedMs(player.id);
 
-  // Shadow
   ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
   ctx.beginPath();
-  ctx.ellipse(screen.x + 2, screen.y + radius * 0.5, radius * 0.6, radius * 0.25, 0, 0, Math.PI * 2);
+  ctx.ellipse(screen.x + 2, screen.y, radius * 0.55, radius * 0.22, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Body — Local: gold, Remote: purple (clearly distinct in dark fantasy palette)
-  ctx.fillStyle = isLocal ? '#c9a84c' : '#8b5fbf';
-  ctx.beginPath();
-  ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
-  ctx.fill();
+  const drawn = spriteCache?.drawSprite(
+    ctx, spriteName, screen.x, screen.y, tileSize, {
+      action: attacking ? 'attack' : (moving ? 'walk' : 'idle'),
+      facing,
+      distance: dist,
+      attackElapsedMs: attacking ? attackMs : undefined,
+      anchor: 'feet',
+    }
+  ) ?? false;
 
-  // Border
-  ctx.strokeStyle = isLocal ? '#e8d080' : '#a87dd4';
-  ctx.lineWidth = isLocal ? 2 : 1;
-  ctx.stroke();
+  if (!drawn) {
+    ctx.fillStyle = isLocal ? '#c9a84c' : '#8b5fbf';
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = isLocal ? '#e8d080' : '#a87dd4';
+    ctx.lineWidth = isLocal ? 2 : 1;
+    ctx.stroke();
+  }
 
-  // Party leader crown indicator
   if (player.isPartyLeader) {
     ctx.fillStyle = '#ffd700';
     ctx.font = `${Math.max(8, tileSize * 0.35)}px sans-serif`;
@@ -385,7 +570,6 @@ function renderPlayer(ctx: CanvasRenderingContext2D, camera: Camera, player: OwP
     ctx.fillText('★', screen.x, screen.y - radius - 2);
   }
 
-  // Party ring
   if (player.partyId) {
     ctx.strokeStyle = 'rgba(100, 200, 100, 0.5)';
     ctx.lineWidth = 1.5;
@@ -394,11 +578,10 @@ function renderPlayer(ctx: CanvasRenderingContext2D, camera: Camera, player: OwP
     ctx.stroke();
   }
 
-  // Name label
   ctx.fillStyle = isLocal ? '#e8dcc8' : '#b8a0d4';
   ctx.font = `${Math.max(8, tileSize * 0.35)}px sans-serif`;
   ctx.textAlign = 'center';
-  ctx.fillText(player.name, screen.x, screen.y + radius + tileSize * 0.4);
+  ctx.fillText(player.name, screen.x, screen.y + tileSize * 0.28);
 }
 
 function renderLootDrop(ctx: CanvasRenderingContext2D, camera: Camera, drop: LootDropState) {
@@ -442,14 +625,25 @@ function renderLootDrop(ctx: CanvasRenderingContext2D, camera: Camera, drop: Loo
   ctx.shadowBlur = 0;
 }
 
-function renderEnemy(ctx: CanvasRenderingContext2D, camera: Camera, enemy: EnemyState) {
+function renderEnemy(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  enemy: EnemyState,
+  spriteCache: SpriteCache | null,
+  nowMs: number
+) {
   const screen = worldToScreen(camera, enemy.x, enemy.y);
   const tileSize = getEffectiveTileSize(camera);
-  const radius = tileSize * 0.5; // Larger than players (1.5x)
+  const radius = tileSize * 0.5;
+  const spriteName = spriteCache?.getEntry(enemy.subType) ? enemy.subType : 'gronk';
+  const moving = enemy.velocityX !== 0 || enemy.velocityY !== 0;
+  const dist = walkDistance(enemy.id, enemy.x, enemy.y);
+  const facing = facingFromMotion(enemy.id, enemy.velocityX, enemy.velocityY);
+  syncAttackFromCooldown(enemy.id, enemy.attackCooldown);
+  const attacking = isAttacking(enemy.id);
+  const attackMs = attackElapsedMs(enemy.id);
 
-  // Don't render if dead (could show corpse with low opacity)
   if (!enemy.isAlive) {
-    // Fading corpse
     ctx.globalAlpha = 0.4;
     ctx.fillStyle = '#2a1a1a';
     ctx.beginPath();
@@ -459,40 +653,44 @@ function renderEnemy(ctx: CanvasRenderingContext2D, camera: Camera, enemy: Enemy
     return;
   }
 
-  // Shadow
   ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
   ctx.beginPath();
-  ctx.ellipse(screen.x + 1, screen.y + radius * 0.5, radius * 0.6, radius * 0.2, 0, 0, Math.PI * 2);
+  ctx.ellipse(screen.x + 1, screen.y, radius * 0.55, radius * 0.18, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Body — dark brown oval (larger than player circles)
-  ctx.fillStyle = '#3a2a1a';
-  ctx.beginPath();
-  ctx.ellipse(screen.x, screen.y, radius * 0.7, radius, 0, 0, Math.PI * 2);
-  ctx.fill();
+  const drawn = spriteCache?.drawSprite(
+    ctx, spriteName, screen.x, screen.y, tileSize, {
+      action: attacking ? 'attack' : (moving ? 'walk' : 'idle'),
+      facing,
+      distance: dist,
+      attackElapsedMs: attacking ? attackMs : undefined,
+      anchor: 'feet',
+    }
+  ) ?? false;
 
-  // Border
-  ctx.strokeStyle = '#2a1a0a';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
+  if (!drawn) {
+    ctx.fillStyle = '#3a2a1a';
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y, radius * 0.7, radius, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#2a1a0a';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    const bobY = Math.sin(nowMs * 0.003 + enemy.x * 2) * 1.5;
+    ctx.fillStyle = '#c08030';
+    ctx.beginPath();
+    ctx.arc(screen.x + radius * 0.15, screen.y - radius * 0.3 + bobY, tileSize * 0.06, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
-  // Eye (small orange dot) — slight bob animation
-  const bobY = Math.sin(Date.now() * 0.003 + enemy.x * 2) * 1.5;
-  ctx.fillStyle = '#c08030';
-  ctx.beginPath();
-  ctx.arc(screen.x + radius * 0.15, screen.y - radius * 0.3 + bobY, tileSize * 0.06, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Tagged indicator (red glow when someone is fighting this enemy)
   if (enemy.taggedBy) {
-    ctx.strokeStyle = `rgba(200, 50, 50, ${0.4 + Math.sin(Date.now() * 0.005) * 0.2})`;
+    ctx.strokeStyle = `rgba(200, 50, 50, ${0.4 + Math.sin(nowMs * 0.005) * 0.2})`;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.ellipse(screen.x, screen.y, radius * 0.8, radius * 1.1, 0, 0, Math.PI * 2);
     ctx.stroke();
   }
 
-  // HP bar (only show when damaged)
   if (enemy.health < enemy.maxHealth) {
     const barWidth = tileSize * 0.8;
     const barHeight = 3;
@@ -500,11 +698,8 @@ function renderEnemy(ctx: CanvasRenderingContext2D, camera: Camera, enemy: Enemy
     const barY = screen.y - radius - 6;
     const hpPct = enemy.health / enemy.maxHealth;
 
-    // Background
     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
     ctx.fillRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2);
-
-    // HP fill
     ctx.fillStyle = hpPct > 0.5 ? '#6a3030' : '#a02020';
     ctx.fillRect(barX, barY, barWidth * hpPct, barHeight);
   }

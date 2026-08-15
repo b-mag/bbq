@@ -62,7 +62,7 @@ export interface UseP2POverworldReturn {
   /** Switch to a different world shard */
   switchShard: (shardId: string) => Promise<boolean>;
   /** Update our local player position (sent to server for mesh broadcast) */
-  updatePosition: (x: number, y: number, vx: number, vy: number) => void;
+  updatePosition: (x: number, y: number, vx: number, vy: number, relocate?: boolean) => void;
 }
 
 /**
@@ -167,12 +167,11 @@ export function useP2POverworld(): UseP2POverworldReturn {
   }, []);
 
   // Send local player position to server for mesh broadcast
-  const updatePosition = useCallback((x: number, y: number, vx: number, vy: number) => {
-    // POST to local server — it broadcasts to all mesh peers
+  const updatePosition = useCallback((x: number, y: number, vx: number, vy: number, relocate = false) => {
     fetch('/api/p2p/position', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ x, y, velocityX: vx, velocityY: vy }),
+      body: JSON.stringify({ x, y, velocityX: vx, velocityY: vy, relocate }),
     }).catch(() => { /* Best effort */ });
   }, []);
 

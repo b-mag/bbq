@@ -81,12 +81,26 @@ interface LoadedSprite {
 }
 
 export class SpriteCache {
-  private manifest: SpriteManifest = {};
+  private manifest: SpriteManifest = builtinManifest();
   private sprites: Map<string, LoadedSprite> = new Map();
   private byFile: Map<string, LoadedSprite> = new Map();
   private manifestLoaded = false;
+  private loadStarted = false;
+
+  constructor() {
+    this.prefetchPlayers();
+  }
+
+  /** Kick the player sheets immediately so overworld is not stuck on a gold circle. */
+  private prefetchPlayers(): void {
+    for (const name of ['player_a', 'player_b', 'player_c']) {
+      void this.loadFile(this.fileFor(name), [name]);
+    }
+  }
 
   async loadAll(): Promise<void> {
+    if (this.loadStarted && this.manifestLoaded) return;
+    this.loadStarted = true;
     try {
       const response = await fetch('/assets/sprites/manifest.json');
       if (!response.ok) {
@@ -162,9 +176,18 @@ export class SpriteCache {
     if (!entry) return false;
 
     const sprite = this.sprites.get(name);
-    const heightScale = opts.heightScale ?? (entry.directions && entry.directions > 1 ? 1.28 : 1);
-    const renderWidth = (entry.width / 32) * scale;
-    const renderHeight = (entry.height / 32) * scale * heightScale;
+    const dirs = entry.directions && entry.directions > 1 ? entry.directions : 1;
+    const heightScale = opts.heightScale ?? (dirs > 1 ? 1.28 : 1);
+    const img = sprite?.loaded ? sprite.image : null;
+    const rowCount = dirs * ((entry.attackFrames ?? 0) > 0 ? 2 : 1);
+    const srcW = img && img.naturalWidth > 0
+      ? Math.max(1, Math.round(img.naturalWidth / Math.max(1, entry.frames)))
+      : entry.width;
+    const srcH = img && img.naturalHeight > 0
+      ? Math.max(1, Math.round(img.naturalHeight / rowCount))
+      : entry.height;
+    const renderWidth = (srcW / 32) * scale;
+    const renderHeight = (srcH / 32) * scale * heightScale;
     const anchor = opts.anchor ?? 'feet';
     const dx = Math.round(x - renderWidth / 2);
     const dy = anchor === 'feet'
@@ -177,7 +200,6 @@ export class SpriteCache {
     }
 
     if (sprite?.loaded) {
-      const dirs = entry.directions && entry.directions > 1 ? entry.directions : 1;
       const facing = Math.max(0, Math.min(dirs - 1, opts.facing ?? 0));
       const attacking = opts.action === 'attack' && (entry.attackFrames ?? 0) > 0;
       const walkFrames = Math.max(1, entry.frames);
@@ -200,14 +222,14 @@ export class SpriteCache {
 
       ctx.drawImage(
         sprite.image,
-        frame * entry.width, row * entry.height, entry.width, entry.height,
+        frame * srcW, row * srcH, srcW, srcH,
         dx, dy, Math.round(renderWidth), Math.round(renderHeight)
       );
       return true;
     }
 
     this.drawPlaceholder(ctx, name, entry, dx, dy, renderWidth, renderHeight);
-    return false;
+    return true;
   }
 
   private drawPlaceholder(

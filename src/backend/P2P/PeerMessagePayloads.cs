@@ -151,6 +151,12 @@ public sealed class PeerStateUpdatePayload
     /// <summary>Cosmetic body id: a, b, or c.</summary>
     public string Figure { get; set; } = "b";
 
+    /// <summary>
+    /// Legitimate origin reset (dungeon/interior exit, waypoints, dev fast-travel).
+    /// Receivers skip speed/teleport checks and retarget their tracker.
+    /// </summary>
+    public bool Relocate { get; set; }
+
     /// <summary>Server tick when this state was generated (for ordering/validation).</summary>
     public long Timestamp { get; set; }
 }

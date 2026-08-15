@@ -12,8 +12,10 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useOverworldInput } from '@/hooks/useOverworldInput';
 import { OwDungeonEntranceData, OwWorldObjectData, OwLandmarkData } from '@/lib/overworld-messages';
-import { OverworldGameMap, decodeOverworldMap, buildLakeOverlay } from '@/lib/overworld-map';
+import { OverworldGameMap, decodeOverworldMap, buildLakeOverlay, nearestOwWalkable } from '@/lib/overworld-map';
+import { FogOfWar } from '@/lib/engine/fogOfWar';
 import OverworldCanvas from './OverworldCanvas';
+import OverworldMapPanel from './OverworldMapPanel';
 import OverworldChat from './OverworldChat';
 import P2POverlay from './P2POverlay';
 import HealthBar from './HealthBar';
@@ -70,7 +72,11 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
   const [nearbyAltar, setNearbyAltar] = useState(false);
   const [pendingInvite, setPendingInvite] = useState<{ fromPeerId: string; inviterName: string } | null>(null);
   const [chatFocused, setChatFocused] = useState(false);
-  const [clientSettings, setClientSettings] = useState({ showGlyphOverlay: true, showFps: false });
+  const [clientSettings, setClientSettings] = useState({ showGlyphOverlay: true, showFps: false, devMode: false });
+  const [showMap, setShowMap] = useState(false);
+  const [fog, setFog] = useState<FogOfWar | null>(null);
+  const fogRef = useRef<FogOfWar | null>(null);
+  const resumeRef = useRef<{ x: number; y: number } | null>(null);
 
   const [showPauseMenu, setShowPauseMenu] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -95,7 +101,7 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
   const playersRef = useRef(p2p.players);
   playersRef.current = p2p.players;
   const declinedInvitesRef = useRef<Set<string>>(new Set());
-  const anyPanelOpen = showPauseMenu || showSettings || showInventory || showAbilitySelect || showFlameOffering || showShop || !!dialogue;
+  const anyPanelOpen = showPauseMenu || showSettings || showInventory || showAbilitySelect || showFlameOffering || showShop || showMap || !!dialogue;
 
   const activeMap = interior?.map ?? map;
   const activeObjects = interior?.objects ?? worldObjects;
@@ -197,6 +203,7 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         e.preventDefault();
         if (dialogue) { setDialogue(null); removePanel('dialogue'); }
         else if (showShop) { setShowShop(false); removePanel('cryptol-shop'); }
+        else if (showMap) { setShowMap(false); removePanel('overworld-map'); }
         else if (showSettings) { setShowSettings(false); removePanel('settings'); }
         else if (showFlameOffering) { setShowFlameOffering(false); removePanel('flame-offering'); }
         else if (showInventory) { setShowInventory(false); removePanel('inventory'); }
@@ -204,6 +211,17 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         else if (interior) { exitInterior(); }
         else if (showPauseMenu) { setShowPauseMenu(false); removePanel('pause-menu'); }
         else { setShowPauseMenu(true); pushPanel('pause-menu'); }
+        return;
+      }
+
+      if (e.key === 'm' || e.key === 'M') {
+        if (showMap) {
+          setShowMap(false);
+          removePanel('overworld-map');
+        } else if (!dialogue && !showShop && !showSettings && !showPauseMenu) {
+          setShowMap(true);
+          pushPanel('overworld-map');
+        }
         return;
       }
 
@@ -254,7 +272,7 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     chatFocused, anyPanelOpen, showSettings, showFlameOffering, showInventory,
-    showAbilitySelect, showPauseMenu, showShop, nearbyEntrance, nearbyAltar,
+    showAbilitySelect, showPauseMenu, showShop, showMap, nearbyEntrance, nearbyAltar,
     nearbyBuilding, nearbyNpc, interior, dialogue, enterDungeon, openFlame,
     enterInterior, exitInterior, openDialogue,
   ]);
@@ -266,7 +284,7 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
     fetch('/api/p2p/name', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: playerName, figure: playerFigure || 'b' }),
+      body: JSON.stringify({ name: playerName, figure: playerFigure || undefined }),
     }).catch(() => {});
 
     const loadMap = async () => {
@@ -296,8 +314,38 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
           setLandmarks(data.landmarks || []);
           const spawnX = data.spawnPoint?.x != null ? data.spawnPoint.x + 0.5 : 320.5;
           const spawnY = data.spawnPoint?.y != null ? data.spawnPoint.y + 0.5 : 544.5;
-          input.setInitialPosition(spawnX, spawnY);
-          console.log(`[Overworld] Map loaded via REST: ${data.width}x${data.height}, spawn at (${spawnX}, ${spawnY})`);
+          let startX = spawnX;
+          let startY = spawnY;
+          try {
+            const bootRes = await fetch('/api/gameplay/bootstrap');
+            if (bootRes.ok) {
+              const boot = await bootRes.json();
+              if (typeof boot.lastX === 'number' && typeof boot.lastY === 'number'
+                  && Number.isFinite(boot.lastX) && Number.isFinite(boot.lastY)
+                  && boot.lastX >= 1 && boot.lastY >= 1
+                  && boot.lastX < decoded.width - 1 && boot.lastY < decoded.height - 1) {
+                startX = boot.lastX;
+                startY = boot.lastY;
+              }
+              if (boot.devMode) {
+                setClientSettings(s => ({ ...s, devMode: true }));
+              }
+              const nextFog = FogOfWar.fromBase64(decoded.width, decoded.height, boot.exploredFogBase64);
+              nextFog.revealAround(startX, startY);
+              fogRef.current = nextFog;
+              setFog(nextFog);
+            }
+          } catch { /* spawn fallback */ }
+          if (!fogRef.current) {
+            const nextFog = new FogOfWar(decoded.width, decoded.height);
+            nextFog.revealAround(startX, startY);
+            fogRef.current = nextFog;
+            setFog(nextFog);
+          }
+          resumeRef.current = { x: startX, y: startY };
+          input.setInitialPosition(startX, startY);
+          p2p.updatePosition(startX, startY, 0, 0, true);
+          console.log(`[Overworld] Map loaded via REST: ${data.width}x${data.height}, resume at (${startX}, ${startY})`);
         } else {
           console.warn('[Overworld] /api/p2p/map missing tilesBase64, will retry...');
           setTimeout(loadMap, 2000);
@@ -318,6 +366,7 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         setClientSettings({
           showGlyphOverlay: d.showGlyphOverlay !== false,
           showFps: !!d.showFps,
+          devMode: !!d.devMode,
         });
       })
       .catch(() => {});
@@ -404,16 +453,22 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
     if (pos.x !== 0 || pos.y !== 0) {
       p2p.updatePosition(pos.x, pos.y, input.velocityX, input.velocityY);
     }
+    const f = fogRef.current;
+    if (f && (pos.x !== 0 || pos.y !== 0)) {
+      f.revealAround(pos.x, pos.y);
+    }
   }, [input.position, p2p, interior]);
 
   useEffect(() => {
     if (input.position.x === 0 && input.position.y === 0 && p2p.status) {
       const localP2P = p2p.players.find(p => p.id === p2p.status?.peerId);
-      if (localP2P && (localP2P.x !== 0 || localP2P.y !== 0)) {
-        input.setInitialPosition(localP2P.x, localP2P.y);
+      if (!localP2P || (localP2P.x === 0 && localP2P.y === 0)) return;
+      if (map && (localP2P.x < 1 || localP2P.y < 1 || localP2P.x >= map.width - 1 || localP2P.y >= map.height - 1)) {
+        return;
       }
+      input.setInitialPosition(localP2P.x, localP2P.y);
     }
-  }, [p2p.players, p2p.status, input]);
+  }, [p2p.players, p2p.status, input, map]);
 
   // Party REST poll
   useEffect(() => {
@@ -467,19 +522,36 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
     return () => clearInterval(interval);
   }, [onEnterDungeon, transitionToDungeon]);
 
-  const displayPlayers = p2p.players.map(p => {
-    if (localId && p.id === localId) {
-      return {
-        ...p,
+  const resolvedLocalId = localId ?? '__local__';
+  const displayPlayers = (() => {
+    const mapped = p2p.players.map(p => {
+      if (localId && p.id === localId) {
+        return {
+          ...p,
+          x: input.position.x,
+          y: input.position.y,
+          velocityX: input.velocityX,
+          velocityY: input.velocityY,
+          figure: playerFigure || p.figure,
+        };
+      }
+      return p;
+    });
+    if (!mapped.some(p => p.id === resolvedLocalId)) {
+      mapped.push({
+        id: resolvedLocalId,
+        name: playerName,
         x: input.position.x,
         y: input.position.y,
         velocityX: input.velocityX,
         velocityY: input.velocityY,
-        figure: playerFigure || p.figure,
-      };
+        figure: playerFigure,
+        status: 'exploring',
+        isPartyLeader: false,
+      });
     }
-    return p;
-  });
+    return mapped;
+  })();
 
   const handleInvitePlayer = useCallback(async (targetId: string) => {
     if (!targetId || targetId === localId) return;
@@ -510,8 +582,48 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
   }, [pendingInvite]);
 
   const handleSettingsSaved = useCallback((s: GameSettings) => {
-    setClientSettings({ showGlyphOverlay: s.showGlyphOverlay, showFps: s.showFps });
+    setClientSettings({ showGlyphOverlay: s.showGlyphOverlay, showFps: s.showFps, devMode: s.devMode });
   }, []);
+
+  const persistFog = useCallback(() => {
+    const f = fogRef.current;
+    if (!f || !f.dirty) return;
+    f.dirty = false;
+    fetch('/api/gameplay/explored-fog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ exploredFogBase64: f.toBase64() }),
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => persistFog(), 8000);
+    return () => {
+      persistFog();
+      clearInterval(id);
+    };
+  }, [persistFog]);
+
+  const handleMobilityDash = useCallback((x: number, y: number) => {
+    input.setMovementLocked(false);
+    input.setInitialPosition(x, y);
+    p2p.updatePosition(x, y, 0, 0, true);
+  }, [input, p2p]);
+
+  const handleDevTeleport = useCallback((x: number, y: number) => {
+    if (interior) return;
+    if (!map) return;
+    const dest = nearestOwWalkable(map, x, y);
+    input.setInitialPosition(dest.x, dest.y);
+    p2p.updatePosition(dest.x, dest.y, 0, 0, true);
+    const f = fogRef.current;
+    if (f) {
+      f.revealAround(dest.x, dest.y);
+      const next = f.clone();
+      fogRef.current = next;
+      setFog(next);
+    }
+  }, [interior, map, input, p2p]);
 
   if (!map) {
     return (
@@ -540,8 +652,8 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
     <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden', background: '#0d0f07' }}>
       <OverworldCanvas
         map={activeMap}
-        players={interior ? displayPlayers.filter(p => p.id === localId) : displayPlayers}
-        localPlayerId={localId}
+        players={interior ? displayPlayers.filter(p => p.id === resolvedLocalId) : displayPlayers}
+        localPlayerId={resolvedLocalId}
         dungeonEntrances={interior ? [] : dungeonEntrances}
         worldObjects={activeObjects}
         landmarks={interior ? [] : landmarks}
@@ -554,6 +666,10 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         lakeDrained={lakeDrained}
         combatEnabled={!interior}
         interiorMode={!!interior}
+        localFigure={playerFigure}
+        secondaryAbility={stats.secondaryAbility}
+        onMobilityDash={handleMobilityDash}
+        onSpiritBegin={() => input.setMovementLocked(true)}
       />
 
       <HealthBar hp={stats.hp} maxHp={stats.maxHp} level={stats.level} />
@@ -690,7 +806,7 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         background: 'rgba(13, 15, 7, 0.7)', borderRadius: 4,
         color: '#6a5d4a', fontSize: '0.65rem',
       }}>
-        WASD: Move | LMB: Attack | RMB: Secondary | E: Interact | F: Flame | I: Inventory | ESC: Pause | Enter: Chat
+        WASD: Move | LMB: Attack | RMB: Secondary | E: Interact | F: Flame | I: Inventory | M: Map | ESC: Pause | Enter: Chat
       </div>
 
       <P2POverlay
@@ -706,6 +822,21 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
           onResume={() => { setShowPauseMenu(false); removePanel('pause-menu'); }}
           onSettings={() => { setShowSettings(true); pushPanel('settings'); }}
           onQuit={onDisconnect}
+        />
+      )}
+
+      {showMap && map && fog && (
+        <OverworldMapPanel
+          map={map}
+          fog={fog}
+          devMode={clientSettings.devMode}
+          localX={input.position.x}
+          localY={input.position.y}
+          localId={resolvedLocalId}
+          players={displayPlayers}
+          landmarks={landmarks}
+          onClose={() => { setShowMap(false); removePanel('overworld-map'); persistFog(); }}
+          onDevTeleport={clientSettings.devMode ? handleDevTeleport : undefined}
         />
       )}
 

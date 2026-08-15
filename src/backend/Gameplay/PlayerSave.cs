@@ -65,6 +65,10 @@ public sealed class PlayerSaveData
     public float MasterVolume { get; set; } = 1f;
     public bool ShowGlyphOverlay { get; set; } = true;
     public bool ShowFps { get; set; }
+    /// <summary>Local test tools: map reveal, click-to-travel. Never synced to peers.</summary>
+    public bool DevMode { get; set; }
+    /// <summary>Packed fog-of-war bitfield (4x4 chunks). Local knowledge only — not P2P.</summary>
+    public string ExploredFogBase64 { get; set; } = "";
 
     // --- Progression ---
     public int Level { get; set; } = 1;
@@ -77,7 +81,7 @@ public sealed class PlayerSaveData
     public List<string> UnlockedAbilityIds { get; set; } = new()
     {
         "ember_spray", "pale_blade", "void_bolt", "bone_cleaver", "hex_dart",
-        "warding_light", "iron_veil", "shadow_step", "grim_howl", "cinder_ward",
+        "warding_light", "iron_veil", "shadow_step", "grim_howl", "cinder_ward", "soul_projection",
     };
     public List<string> UnlockedItemIds { get; set; } = new();
 

@@ -175,6 +175,16 @@ public sealed class PeerValidator
             return true;
         }
 
+        // Trusted origin reset: dungeon/interior exit, waypoints, dev fast-travel.
+        // Peers still render the new position; we just don't vote-kick for the jump.
+        if (update.Relocate)
+        {
+            tracker.LastX = update.X;
+            tracker.LastY = update.Y;
+            tracker.LastTimestamp = update.Timestamp;
+            return true;
+        }
+
         // Apply violation decay
         if (tracker.ViolationCount > 0 &&
             (DateTime.UtcNow - tracker.LastViolationAt).TotalSeconds > ViolationDecaySeconds)

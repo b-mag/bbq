@@ -220,6 +220,7 @@ function renderPlayer(
     facing,
     distance: dist,
     attackElapsedMs: attacking ? attackMs : undefined,
+    anchor: 'feet',
   }) ?? false;
 
   if (!drawn) {

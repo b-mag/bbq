@@ -137,6 +137,12 @@ public sealed record AbilityDefinition
 
     /// <summary>Flavor text description for the ability selection UI.</summary>
     public required string Description { get; init; }
+
+    /// <summary>
+    /// When true, mobility dashes ignore walls and world collision (spirit form).
+    /// Destination is still clamped to map bounds.
+    /// </summary>
+    public bool PhasesThroughWalls { get; init; }
 }
 
 /// <summary>
@@ -304,6 +310,21 @@ public static class AbilityRegistry
             DurationTicks = 50,
             CooldownTicks = 50,
             Description = "Wrap yourself in smoldering wards. Absorbs hits; sparks linger on the veil.",
+        },
+
+        ["soul_projection"] = new AbilityDefinition
+        {
+            Id = "soul_projection",
+            Name = "Soul Projection",
+            Slot = AbilitySlot.Secondary,
+            Type = AbilityType.Mobility,
+            StaminaCost = 26f,
+            Damage = 14,
+            Range = 6f,
+            CooldownTicks = 36,
+            DurationTicks = 8,
+            PhasesThroughWalls = true,
+            Description = "Tear your spirit free. The body stills while a pale wraith races through matter and strikes along its path.",
         },
     };
 

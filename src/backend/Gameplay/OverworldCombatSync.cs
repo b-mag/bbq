@@ -507,7 +507,10 @@ public sealed class OverworldCombatSync
             case AbilityType.Mobility:
                 playerEntity.HasIFrames = true;
                 playerEntity.IFrameTicks = ability.DurationTicks;
-                // Position update happens on the client (peer-authoritative position)
+                // Position is client-authoritative on the overworld. Damaging dashes
+                // (soul projection) still resolve hits on the host along the aimed path.
+                if (ability.Damage > 0)
+                    ProcessDashHitsOnHost(playerEntity, ability, aimAngle, peerId);
                 break;
         }
 
@@ -600,6 +603,42 @@ public sealed class OverworldCombatSync
                 }
 
                 break; // Single target melee
+            }
+        }
+    }
+
+    /// <summary>Strike every enemy near the dash segment (Soul Projection).</summary>
+    private void ProcessDashHitsOnHost(Entity source, AbilityDefinition ability, float aimAngle, string peerId)
+    {
+        float x0 = source.X;
+        float y0 = source.Y;
+        float x1 = x0 + MathF.Cos(aimAngle) * ability.Range;
+        float y1 = y0 + MathF.Sin(aimAngle) * ability.Range;
+        const float hitRadius = 0.9f;
+        float hitRadiusSq = hitRadius * hitRadius;
+        float dx = x1 - x0;
+        float dy = y1 - y0;
+        float lenSq = Math.Max(0.01f, dx * dx + dy * dy);
+
+        foreach (var enemy in _spawner.GetAliveEnemies())
+        {
+            float t = Math.Clamp(((enemy.X - x0) * dx + (enemy.Y - y0) * dy) / lenSq, 0f, 1f);
+            float px = x0 + dx * t;
+            float py = y0 + dy * t;
+            float ex = enemy.X - px;
+            float ey = enemy.Y - py;
+            if (ex * ex + ey * ey > hitRadiusSq) continue;
+
+            bool killed = enemy.TakeDamage(ability.Damage);
+            TrackEnemyAttacker(enemy.Id, peerId);
+            if (enemy.TaggedBy == null)
+                enemy.TaggedBy = peerId;
+            EnemyAI.NotifyAttacked(enemy, source.Id);
+            _ = BroadcastDamageEventAsync(peerId, enemy.Id, ability.Damage, enemy.Health, killed, enemy.X, enemy.Y);
+            if (killed)
+            {
+                _spawner.NotifyEnemyDeath(enemy.Id);
+                _ = HandleEnemyKillAsync(enemy, peerId);
             }
         }
     }
@@ -875,12 +914,7 @@ public sealed class OverworldCombatSync
 
         var restoreX = data.WasInDungeon ? data.LastSafeOverworldX : data.LastX;
         var restoreY = data.WasInDungeon ? data.LastSafeOverworldY : data.LastY;
-        if (data.WorldWidth <= 200)
-        {
-            var scale = OverworldBootstrap.Width / 200f;
-            restoreX *= scale;
-            restoreY *= scale;
-        }
+        OverworldBootstrap.ClampResume(data.WorldWidth, ref restoreX, ref restoreY);
         _localPlayer.X = restoreX;
         _localPlayer.Y = restoreY;
         _overworldSync.UpdateLocalPosition(restoreX, restoreY, 0, 0);
@@ -904,6 +938,8 @@ public sealed class OverworldCombatSync
             _localIdentity.DisplayName = data.DisplayName;
         if (!string.IsNullOrWhiteSpace(data.Figure))
             _localIdentity.Figure = data.Figure;
+        if (!data.UnlockedAbilityIds.Contains("soul_projection"))
+            data.UnlockedAbilityIds.Add("soul_projection");
 
         Console.WriteLine($"[Save] Applied to combat: Lv{_localPlayer.Level} at ({restoreX:F1},{restoreY:F1})");
     }
@@ -928,12 +964,16 @@ public sealed class OverworldCombatSync
             MasterVolume = existing.MasterVolume,
             ShowGlyphOverlay = existing.ShowGlyphOverlay,
             ShowFps = existing.ShowFps,
+            DevMode = existing.DevMode,
+            ExploredFogBase64 = existing.ExploredFogBase64,
             Level = _localPlayer.Level,
             XP = _localPlayer.XP,
             PaleMarks = existing.PaleMarks,
             PrimaryAbility = _localPlayer.PrimaryAbility,
             SecondaryAbility = _localPlayer.SecondaryAbility,
-            UnlockedAbilityIds = existing.UnlockedAbilityIds,
+            UnlockedAbilityIds = existing.UnlockedAbilityIds.Contains("soul_projection")
+                ? existing.UnlockedAbilityIds
+                : [.. existing.UnlockedAbilityIds, "soul_projection"],
             UnlockedItemIds = existing.UnlockedItemIds,
             WeaponSlot = equip.GetValueOrDefault("weapon"),
             ArmorSlot = equip.GetValueOrDefault("armor"),

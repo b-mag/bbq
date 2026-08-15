@@ -177,3 +177,51 @@ export function isOwWalkableF(map: OverworldGameMap, x: number, y: number, radiu
     isOwWalkable(map, Math.floor(x + radius), Math.floor(y + radius))
   );
 }
+
+/** Snap a world point to the nearest walkable tile centre (dev teleport / spirit land). */
+export function nearestOwWalkable(map: OverworldGameMap, x: number, y: number, maxRadius = 16): { x: number; y: number } {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  if (isOwWalkable(map, ix, iy)) return { x: ix + 0.5, y: iy + 0.5 };
+  for (let r = 1; r <= maxRadius; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const tx = ix + dx;
+        const ty = iy + dy;
+        if (isOwWalkable(map, tx, ty)) return { x: tx + 0.5, y: ty + 0.5 };
+      }
+    }
+  }
+  return { x: Math.max(0.5, Math.min(map.width - 0.5, x)), y: Math.max(0.5, Math.min(map.height - 0.5, y)) };
+}
+
+/** Client-side mobility destination. Phasing dashes go through walls then snap to walkable ground. */
+export function dashDestination(
+  map: OverworldGameMap,
+  x: number,
+  y: number,
+  angle: number,
+  range: number,
+  phaseThroughWalls: boolean
+): { x: number; y: number } {
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  if (phaseThroughWalls) {
+    const tx = Math.max(0.5, Math.min(map.width - 0.5, x + dx * range));
+    const ty = Math.max(0.5, Math.min(map.height - 0.5, y + dy * range));
+    return nearestOwWalkable(map, tx, ty, 10);
+  }
+  let bestX = x;
+  let bestY = y;
+  const steps = Math.max(4, Math.ceil(range * 8));
+  for (let i = 1; i <= steps; i++) {
+    const t = (i / steps) * range;
+    const nx = x + dx * t;
+    const ny = y + dy * t;
+    if (!isOwWalkableF(map, nx, ny, 0.3)) break;
+    bestX = nx;
+    bestY = ny;
+  }
+  return { x: bestX, y: bestY };
+}

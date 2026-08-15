@@ -18,6 +18,26 @@ public static class OverworldBootstrap
     public const int Height = OverworldWorldGen.Height;
     public const int DefaultSeed = OverworldWorldGen.DefaultSeed;
 
+    /// <summary>
+    /// Map a saved overworld point onto the live world.
+    /// WorldWidth 200 is the legacy greybox. 0 means "unset" — do not scale
+    /// (that used to throw players off the 640 map into empty void).
+    /// </summary>
+    public static void ClampResume(int savedWorldWidth, ref float x, ref float y)
+    {
+        if (savedWorldWidth == 200)
+        {
+            x *= Width / 200f;
+            y *= Height / 200f;
+        }
+
+        if (x < 0.5f || y < 0.5f || x >= Width - 0.5f || y >= Height - 0.5f)
+        {
+            x = 320.5f;
+            y = 544.5f;
+        }
+    }
+
     private static readonly object CacheLock = new();
     private static string? _cachedJson;
     private static int _cachedMajor = -1;

@@ -128,6 +128,7 @@ public sealed class OverworldSync
     private string? _localPartyId;
     private bool _localIsPartyLeader;
     private bool _localDirty; // Only broadcast when something changed
+    private bool _localRelocate; // Next broadcast is a trusted origin reset
 
     // =========================================================================
     // PROPERTIES
@@ -172,15 +173,16 @@ public sealed class OverworldSync
     /// Update the local player's position (called by the local game input system).
     /// This state will be broadcast to all peers on the next tick.
     /// </summary>
-    public void UpdateLocalPosition(float x, float y, float velocityX, float velocityY)
+    public void UpdateLocalPosition(float x, float y, float velocityX, float velocityY, bool relocate = false)
     {
-        if (_localX != x || _localY != y || _localVelocityX != velocityX || _localVelocityY != velocityY)
+        if (relocate || _localX != x || _localY != y || _localVelocityX != velocityX || _localVelocityY != velocityY)
         {
             _localX = x;
             _localY = y;
             _localVelocityX = velocityX;
             _localVelocityY = velocityY;
             _localDirty = true;
+            if (relocate) _localRelocate = true;
         }
     }
 
@@ -257,9 +259,11 @@ public sealed class OverworldSync
                         PartyId = _localPartyId,
                         IsPartyLeader = _localIsPartyLeader,
                         Figure = PeerIdentity.NormalizeFigure(_localIdentity.Figure),
+                        Relocate = _localRelocate,
                         Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     }
                 };
+                _localRelocate = false;
 
                 await _mesh.BroadcastAsync(stateUpdate);
             }
@@ -418,6 +422,7 @@ public sealed class OverworldSync
                         PartyId = _localPartyId,
                         IsPartyLeader = _localIsPartyLeader,
                         Figure = PeerIdentity.NormalizeFigure(_localIdentity.Figure),
+                        Relocate = true,
                         Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     }
                 };

@@ -126,7 +126,7 @@ public static class CombatSystem
                 break;
 
             case AbilityType.Mobility:
-                ExecuteMobility(state, player, ability, aimAngle);
+                ExecuteMobility(state, player, ability, aimAngle, damage);
                 break;
         }
 
@@ -271,50 +271,83 @@ public static class CombatSystem
     }
 
     /// <summary>
-    /// Shadow Step: Teleport a short distance in the aim direction with i-frames.
-    /// The dash grants brief invincibility — timing it to dodge an attack is the skill expression.
-    /// Validates the destination is walkable (can't dash through walls).
-    /// 
-    /// WHY TELEPORT NOT LERP: Instant teleport is simpler to implement and sync across
-    /// peers. A smooth dash animation is purely cosmetic and handled client-side.
+    /// Mobility dash. Shadow Step stops at walls; Soul Projection phases through them.
+    /// Destination is clamped to the map. Damaging dashes hit enemies along the path.
+    /// Client draws the spirit trail; the server snap is the authority in dungeons.
     /// </summary>
-    private static void ExecuteMobility(GameState state, Entity player, AbilityDefinition ability, float aimAngle)
+    private static void ExecuteMobility(GameState state, Entity player, AbilityDefinition ability, float aimAngle, int damage)
     {
+        float startX = player.X;
+        float startY = player.Y;
         float dashDistance = ability.Range;
-        float targetX = player.X + MathF.Cos(aimAngle) * dashDistance;
-        float targetY = player.Y + MathF.Sin(aimAngle) * dashDistance;
+        float targetX = startX + MathF.Cos(aimAngle) * dashDistance;
+        float targetY = startY + MathF.Sin(aimAngle) * dashDistance;
 
-        // Validate destination is walkable (if we have a map)
         if (state.Map != null)
         {
-            // Try the full dash distance first
-            if (state.Map.IsWalkableF(targetX, targetY))
+            targetX = Math.Clamp(targetX, 0.5f, state.Map.Width - 0.5f);
+            targetY = Math.Clamp(targetY, 0.5f, state.Map.Height - 0.5f);
+
+            if (ability.PhasesThroughWalls)
+            {
+                player.X = targetX;
+                player.Y = targetY;
+            }
+            else if (state.Map.IsWalkableF(targetX, targetY))
             {
                 player.X = targetX;
                 player.Y = targetY;
             }
             else
             {
-                // Binary search for the furthest walkable point along the dash vector
-                // This prevents getting stuck on walls while still dashing as far as possible
-                float validDistance = FindMaxWalkableDistance(state.Map, player.X, player.Y, aimAngle, dashDistance);
-                if (validDistance > 0.5f) // Only move if we can dash at least half a tile
+                float validDistance = FindMaxWalkableDistance(state.Map, startX, startY, aimAngle, dashDistance);
+                if (validDistance > 0.5f)
                 {
-                    player.X += MathF.Cos(aimAngle) * validDistance;
-                    player.Y += MathF.Sin(aimAngle) * validDistance;
+                    player.X = startX + MathF.Cos(aimAngle) * validDistance;
+                    player.Y = startY + MathF.Sin(aimAngle) * validDistance;
                 }
             }
         }
         else
         {
-            // No map collision available (e.g., overworld before map loaded) — just teleport
             player.X = targetX;
             player.Y = targetY;
         }
 
-        // Grant invincibility frames
         player.HasIFrames = true;
         player.IFrameTicks = ability.DurationTicks;
+
+        if (damage > 0)
+            ProcessDashHits(state, player, startX, startY, player.X, player.Y, damage);
+    }
+
+    /// <summary>Hit every living enemy near the dash segment (spirit-form strikes).</summary>
+    private static void ProcessDashHits(GameState state, Entity player, float x0, float y0, float x1, float y1, int damage)
+    {
+        const float hitRadius = 0.9f;
+        float hitRadiusSq = hitRadius * hitRadius;
+        float dx = x1 - x0;
+        float dy = y1 - y0;
+        float lenSq = dx * dx + dy * dy;
+        if (lenSq < 0.01f) lenSq = 0.01f;
+
+        foreach (var (_, entity) in state.Entities)
+        {
+            if (entity.Type != EntityType.Enemy || !entity.IsAlive) continue;
+
+            float t = ((entity.X - x0) * dx + (entity.Y - y0) * dy) / lenSq;
+            t = Math.Clamp(t, 0f, 1f);
+            float px = x0 + dx * t;
+            float py = y0 + dy * t;
+            float ex = entity.X - px;
+            float ey = entity.Y - py;
+            if (ex * ex + ey * ey > hitRadiusSq) continue;
+
+            entity.TakeDamage(damage);
+            entity.IsDirty = true;
+            if (entity.TaggedBy == null && player.OwnerId != null)
+                entity.TaggedBy = player.OwnerId;
+        }
     }
 
     /// <summary>

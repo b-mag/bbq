@@ -12,9 +12,9 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { Camera, createCamera, cameraFollow, worldToScreen, screenToWorld, getVisibleBounds, getEffectiveTileSize, MIN_ZOOM, MAX_ZOOM } from '@/lib/engine/camera';
-import { OverworldGameMap, OwTileType, OW_TILE_COLORS, getOwTile } from '@/lib/overworld-map';
+import { OverworldGameMap, OwTileType, OW_TILE_COLORS, getOwTile, dashDestination } from '@/lib/overworld-map';
 import { OwPlayerState, OwDungeonEntranceData, OwWorldObjectData, OwLandmarkData } from '@/lib/overworld-messages';
-import { SpriteCache, initSprites, facingFromMotion, facingFromVelocity, playerSpriteName } from '@/lib/engine/sprites';
+import { SpriteCache, initSprites, getSpriteCache, facingFromMotion, facingFromVelocity, playerSpriteName } from '@/lib/engine/sprites';
 import { walkDistance, isAttacking, attackElapsedMs, noteAttack, syncAttackFromCooldown } from '@/lib/engine/spriteAnim';
 import { TileAtlas, initTilesets } from '@/lib/engine/tilesets';
 import { OverworldTileCache } from '@/lib/engine/tileLayer';
@@ -36,11 +36,16 @@ interface OverworldCanvasProps {
   lakeDrained?: boolean;
   combatEnabled?: boolean;
   interiorMode?: boolean;
+  localFigure?: string;
+  secondaryAbility?: string;
+  onMobilityDash?: (x: number, y: number) => void;
+  onSpiritBegin?: () => void;
 }
 
 export default function OverworldCanvas({
   map, players, localPlayerId, dungeonEntrances, worldObjects, landmarks, enemies, projectiles, lootDrops, width, height, onPlayerClick,
   lakeDrained = false, combatEnabled = true, interiorMode = false,
+  localFigure, secondaryAbility, onMobilityDash, onSpiritBegin,
 }: OverworldCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<Camera>(createCamera(width, height, 32));
@@ -50,6 +55,18 @@ export default function OverworldCanvas({
   const tileCacheRef = useRef(new OverworldTileCache());
   const cameraInitializedRef = useRef(false);
   const slashFxRef = useRef<Array<{ x: number; y: number; angle: number; start: number }>>([]);
+  const spiritDashRef = useRef<{
+    startX: number; startY: number; endX: number; endY: number;
+    t0: number; duration: number; figure: string; facing: number; arrived: boolean;
+  } | null>(null);
+  const localFigureRef = useRef(localFigure);
+  const secondaryRef = useRef(secondaryAbility);
+  const onDashRef = useRef(onMobilityDash);
+  const onSpiritBeginRef = useRef(onSpiritBegin);
+  localFigureRef.current = localFigure;
+  secondaryRef.current = secondaryAbility;
+  onDashRef.current = onMobilityDash;
+  onSpiritBeginRef.current = onSpiritBegin;
 
   const mapRef = useRef(map);
   const playersRef = useRef(players);
@@ -75,6 +92,7 @@ export default function OverworldCanvas({
   interiorRef.current = interiorMode;
 
   useEffect(() => {
+    spriteCacheRef.current = getSpriteCache();
     initSprites().then(cache => {
       spriteCacheRef.current = cache;
     });
@@ -117,21 +135,34 @@ export default function OverworldCanvas({
     const lakeDrainedNow = lakeDrainedRef.current;
     const interiorNow = interiorRef.current;
 
-    const localPlayer = playersNow.find(p => p.id === localId);
-    if (localPlayer) {
-      if (!cameraInitializedRef.current && (localPlayer.x !== 0 || localPlayer.y !== 0)) {
-        camera.x = localPlayer.x;
-        camera.y = localPlayer.y;
+    const nowMs = Date.now();
+    const localPlayer = playersNow.find(p => p.id === localId) ?? playersNow[0] ?? null;
+    const spirit = spiritDashRef.current;
+    const spiritT = spirit ? Math.min(1, (nowMs - spirit.t0) / spirit.duration) : 0;
+    if (spirit && spiritT >= 1 && !spirit.arrived) {
+      spirit.arrived = true;
+      onDashRef.current?.(spirit.endX, spirit.endY);
+      spiritDashRef.current = null;
+    }
+    const followX = spirit
+      ? spirit.startX + (spirit.endX - spirit.startX) * spiritT
+      : localPlayer?.x;
+    const followY = spirit
+      ? spirit.startY + (spirit.endY - spirit.startY) * spiritT
+      : localPlayer?.y;
+    if (followX != null && followY != null && (followX !== 0 || followY !== 0)) {
+      const jump = Math.hypot(camera.x - followX, camera.y - followY);
+      if (!cameraInitializedRef.current || jump > 8) {
+        camera.x = followX;
+        camera.y = followY;
         cameraInitializedRef.current = true;
       } else {
-        cameraFollow(camera, localPlayer.x, localPlayer.y, 0.12);
+        cameraFollow(camera, followX, followY, 0.12);
       }
     }
 
     ctx.imageSmoothingEnabled = false;
-    drawRegionBackdrop(ctx, camera, localPlayer, mapNow, width, height);
-
-    const nowMs = Date.now();
+    drawRegionBackdrop(ctx, camera, localPlayer ?? undefined, mapNow, width, height);
 
     if (mapNow) {
       tileCacheRef.current.draw(ctx, camera, mapNow, tileAtlasRef.current, nowMs);
@@ -141,7 +172,8 @@ export default function OverworldCanvas({
       renderLootDrop(ctx, camera, drop);
     }
 
-    const sprites = spriteCacheRef.current;
+    const sprites = spriteCacheRef.current ?? getSpriteCache();
+    spriteCacheRef.current = sprites;
     const drawables: Array<{ y: number; draw: () => void }> = [];
 
     if (!interiorNow) {
@@ -162,12 +194,18 @@ export default function OverworldCanvas({
       });
     }
 
+    const spiritNow = spiritDashRef.current;
     for (const player of playersNow) {
       if (player.status === 'in_dungeon') continue;
+      const isLocal = !!localId && player.id === localId;
       const facing = facingFromMotion(player.id, player.velocityX, player.velocityY);
+      const figure = isLocal ? (localFigureRef.current || player.figure) : player.figure;
+      const body = (isLocal && spiritNow)
+        ? { ...player, x: spiritNow.startX, y: spiritNow.startY, velocityX: 0, velocityY: 0, figure }
+        : { ...player, figure };
       drawables.push({
-        y: player.y,
-        draw: () => renderPlayer(ctx, camera, player, player.id === localId, sprites, nowMs, facing),
+        y: body.y,
+        draw: () => renderPlayer(ctx, camera, body, isLocal, sprites, nowMs, facing, isLocal && !!spiritNow),
       });
     }
 
@@ -182,6 +220,10 @@ export default function OverworldCanvas({
 
     drawables.sort((a, b) => a.y - b.y);
     for (const d of drawables) d.draw();
+
+    if (spiritNow) {
+      renderSpiritTrail(ctx, camera, spiritNow, sprites, nowMs);
+    }
 
     if (!interiorNow) {
       for (const proj of projectilesNow) {
@@ -268,17 +310,45 @@ export default function OverworldCanvas({
       const camera = cameraRef.current;
       const world = screenToWorld(camera, screenX, screenY);
 
-      const localPlayer = players.find(p => p.id === localPlayerId);
+      const localPlayer = players.find(p => p.id === localPlayerId) ?? players[0];
       if (localPlayer && combatEnabled) {
         const aimAngle = Math.atan2(world.y - localPlayer.y, world.x - localPlayer.x);
+        const abilityId = secondaryRef.current || '';
         fetch('/api/gameplay/combat-action', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ abilitySlot: 'secondary', aimAngle }),
+        }).then(async res => {
+          const data = res.ok ? await res.json().catch(() => null) : null;
+          if (!data?.success) return;
+          const mobility = MOBILITY_CLIENT[abilityId];
+          const mapNow = mapRef.current;
+          if (!mobility || !mapNow) return;
+          const dest = dashDestination(
+            mapNow, localPlayer.x, localPlayer.y, aimAngle, mobility.range, mobility.phase
+          );
+          if (mobility.phase) {
+            onSpiritBeginRef.current?.();
+            spiritDashRef.current = {
+              startX: localPlayer.x,
+              startY: localPlayer.y,
+              endX: dest.x,
+              endY: dest.y,
+              t0: Date.now(),
+              duration: mobility.duration,
+              figure: localFigureRef.current || localPlayer.figure || 'b',
+              facing: facingFromVelocity(Math.cos(aimAngle), Math.sin(aimAngle)),
+              arrived: false,
+            };
+          } else {
+            onDashRef.current?.(dest.x, dest.y);
+          }
         }).catch(() => {});
         if (localPlayerId) {
           noteAttack(localPlayerId);
-          slashFxRef.current.push({ x: localPlayer.x, y: localPlayer.y, angle: aimAngle, start: performance.now() });
+          if (abilityId !== 'soul_projection') {
+            slashFxRef.current.push({ x: localPlayer.x, y: localPlayer.y, angle: aimAngle, start: performance.now() });
+          }
         }
       }
     };
@@ -300,6 +370,11 @@ export default function OverworldCanvas({
     />
   );
 }
+
+const MOBILITY_CLIENT: Record<string, { range: number; phase: boolean; duration: number }> = {
+  shadow_step: { range: 3, phase: false, duration: 160 },
+  soul_projection: { range: 6, phase: true, duration: 280 },
+};
 
 // =============================================================================
 // Rendering functions
@@ -527,16 +602,19 @@ function renderPlayer(
   isLocal: boolean,
   spriteCache: SpriteCache | null,
   nowMs: number,
-  facing: number
+  facing: number,
+  bodyFrozen = false
 ) {
   const screen = worldToScreen(camera, player.x, player.y);
   const tileSize = getEffectiveTileSize(camera);
   const radius = tileSize * 0.35;
-  const moving = player.velocityX !== 0 || player.velocityY !== 0;
+  const moving = !bodyFrozen && (player.velocityX !== 0 || player.velocityY !== 0);
   const spriteName = playerSpriteName(player.figure);
   const dist = walkDistance(player.id, player.x, player.y);
   const attacking = isAttacking(player.id);
   const attackMs = attackElapsedMs(player.id);
+
+  if (bodyFrozen) ctx.globalAlpha = 0.45;
 
   ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
   ctx.beginPath();
@@ -582,6 +660,54 @@ function renderPlayer(
   ctx.font = `${Math.max(8, tileSize * 0.35)}px sans-serif`;
   ctx.textAlign = 'center';
   ctx.fillText(player.name, screen.x, screen.y + tileSize * 0.28);
+  if (bodyFrozen) ctx.globalAlpha = 1;
+}
+
+function renderSpiritTrail(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  dash: { startX: number; startY: number; endX: number; endY: number; t0: number; duration: number; figure: string; facing: number },
+  spriteCache: SpriteCache | null,
+  nowMs: number
+) {
+  const t = Math.min(1, (nowMs - dash.t0) / dash.duration);
+  const tileSize = getEffectiveTileSize(camera);
+  const spriteName = playerSpriteName(dash.figure);
+  const ghosts = 5;
+  for (let i = 0; i < ghosts; i++) {
+    const gt = Math.max(0, t - (ghosts - 1 - i) * 0.08);
+    const gx = dash.startX + (dash.endX - dash.startX) * gt;
+    const gy = dash.startY + (dash.endY - dash.startY) * gt;
+    const screen = worldToScreen(camera, gx, gy);
+    ctx.save();
+    ctx.globalAlpha = 0.12 + i * 0.12;
+    ctx.globalCompositeOperation = 'lighter';
+    const drawn = spriteCache?.drawSprite(ctx, spriteName, screen.x, screen.y, tileSize, {
+      action: 'walk',
+      facing: dash.facing,
+      distance: gt * 4,
+      anchor: 'feet',
+    }) ?? false;
+    if (!drawn) {
+      ctx.fillStyle = `rgba(180, 230, 255, ${0.2 + i * 0.12})`;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, tileSize * 0.28, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  const hx = dash.startX + (dash.endX - dash.startX) * t;
+  const hy = dash.startY + (dash.endY - dash.startY) * t;
+  const head = worldToScreen(camera, hx, hy);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = 'rgba(200, 240, 255, 0.55)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(head.x, head.y, tileSize * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function renderLootDrop(ctx: CanvasRenderingContext2D, camera: Camera, drop: LootDropState) {

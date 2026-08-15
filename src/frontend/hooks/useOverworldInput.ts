@@ -37,6 +37,7 @@ export function useOverworldInput(options: UseOverworldInputOptions) {
   const sequenceRef = useRef(0);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const interactRef = useRef(false);
+  const lockedRef = useRef(false);
 
   // Track pending inputs for reconciliation
   const pendingInputsRef = useRef<Array<{ seq: number; dx: number; dy: number }>>([]);
@@ -44,6 +45,12 @@ export function useOverworldInput(options: UseOverworldInputOptions) {
   const setInitialPosition = useCallback((x: number, y: number) => {
     posRef.current = { x, y };
     setPosition({ x, y });
+    pendingInputsRef.current = [];
+  }, []);
+
+  const setMovementLocked = useCallback((locked: boolean) => {
+    lockedRef.current = locked;
+    if (locked) velRef.current = { x: 0, y: 0 };
   }, []);
 
   // Reconcile with server state
@@ -99,6 +106,10 @@ export function useOverworldInput(options: UseOverworldInputOptions) {
     }
 
     intervalRef.current = setInterval(() => {
+      if (lockedRef.current) {
+        velRef.current = { x: 0, y: 0 };
+        return;
+      }
       const keys = keysRef.current;
       let moveX = 0;
       let moveY = 0;
@@ -178,6 +189,7 @@ export function useOverworldInput(options: UseOverworldInputOptions) {
     velocityX: velRef.current.x,
     velocityY: velRef.current.y,
     setInitialPosition,
+    setMovementLocked,
     reconcile,
   };
 }

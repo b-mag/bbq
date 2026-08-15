@@ -29,9 +29,14 @@ const ABILITY_INFO: Record<string, { name: string; color: string; letter: string
   ember_spray: { name: 'Ember Spray', color: '#c06020', letter: 'E', cost: 25 },
   pale_blade: { name: 'Pale Blade', color: '#d0d0e0', letter: 'P', cost: 20 },
   void_bolt: { name: 'Void Bolt', color: '#6040a0', letter: 'V', cost: 22 },
+  bone_cleaver: { name: 'Bone Cleaver', color: '#a08060', letter: 'B', cost: 28 },
+  hex_dart: { name: 'Hex Dart', color: '#8050a0', letter: 'H', cost: 18 },
   warding_light: { name: 'Warding Light', color: '#c0a040', letter: 'W', cost: 35 },
   iron_veil: { name: 'Iron Veil', color: '#4070a0', letter: 'I', cost: 30 },
   shadow_step: { name: 'Shadow Step', color: '#303040', letter: 'S', cost: 28 },
+  grim_howl: { name: 'Grim Howl', color: '#906040', letter: 'G', cost: 30 },
+  cinder_ward: { name: 'Cinder Ward', color: '#c05020', letter: 'C', cost: 32 },
+  soul_projection: { name: 'Soul Projection', color: '#c8e8f0', letter: 'Ψ', cost: 26 },
 };
 
 export default function AbilityBar({

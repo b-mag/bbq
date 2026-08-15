@@ -616,7 +616,7 @@ app.MapPost("/api/p2p/position", (P2PPositionUpdate update, OverworldSync sync, 
     {
         Console.WriteLine($"[P2P:API] POST /api/p2p/position (call #{count}) → ({update.X:F1}, {update.Y:F1})");
     }
-    sync.UpdateLocalPosition(update.X, update.Y, update.VelocityX, update.VelocityY);
+    sync.UpdateLocalPosition(update.X, update.Y, update.VelocityX, update.VelocityY, update.Relocate);
     combat.UpdateLocalPlayerPosition(update.X, update.Y);
     return Results.Ok();
 });
@@ -647,12 +647,19 @@ app.MapGet("/api/gameplay/bootstrap", (SaveManager saves, PeerIdentity identity)
 {
     var d = saves.CurrentData;
     var needsName = !d.HasCompletedFirstRun && string.IsNullOrWhiteSpace(d.DisplayName);
+    var restoreX = d.WasInDungeon ? d.LastSafeOverworldX : d.LastX;
+    var restoreY = d.WasInDungeon ? d.LastSafeOverworldY : d.LastY;
+    OverworldBootstrap.ClampResume(d.WorldWidth, ref restoreX, ref restoreY);
     return Results.Ok(new BootstrapResponse(
         NeedsName: needsName,
         DisplayName: string.IsNullOrWhiteSpace(d.DisplayName) ? identity.DisplayName : d.DisplayName,
         OfflineMode: d.OfflineMode,
         Level: d.Level,
-        Figure: PeerIdentity.NormalizeFigure(string.IsNullOrWhiteSpace(d.Figure) ? identity.Figure : d.Figure)));
+        Figure: PeerIdentity.NormalizeFigure(string.IsNullOrWhiteSpace(d.Figure) ? identity.Figure : d.Figure),
+        LastX: restoreX,
+        LastY: restoreY,
+        DevMode: d.DevMode,
+        ExploredFogBase64: d.ExploredFogBase64 ?? ""));
 });
 
 app.MapGet("/api/gameplay/settings", (SaveManager saves) =>
@@ -660,7 +667,7 @@ app.MapGet("/api/gameplay/settings", (SaveManager saves) =>
     var d = saves.CurrentData;
     return Results.Ok(new SettingsResponse(
         d.DisplayName, d.OfflineMode, d.MasterVolume, d.ShowGlyphOverlay, d.ShowFps,
-        d.LastSavedAt.ToString("O")));
+        d.DevMode, d.LastSavedAt.ToString("O")));
 });
 
 app.MapPost("/api/gameplay/settings", (SettingsUpdateRequest request, SaveManager saves, PeerIdentity identity, OverworldCombatSync combat, TrackerClient tracker) =>
@@ -684,10 +691,19 @@ app.MapPost("/api/gameplay/settings", (SettingsUpdateRequest request, SaveManage
     if (request.MasterVolume.HasValue) data.MasterVolume = Math.Clamp(request.MasterVolume.Value, 0f, 1f);
     if (request.ShowGlyphOverlay.HasValue) data.ShowGlyphOverlay = request.ShowGlyphOverlay.Value;
     if (request.ShowFps.HasValue) data.ShowFps = request.ShowFps.Value;
+    if (request.DevMode.HasValue) data.DevMode = request.DevMode.Value;
     saves.Save(data);
     return Results.Ok(new SettingsResponse(
         data.DisplayName, data.OfflineMode, data.MasterVolume, data.ShowGlyphOverlay, data.ShowFps,
-        data.LastSavedAt.ToString("O")));
+        data.DevMode, data.LastSavedAt.ToString("O")));
+});
+
+app.MapPost("/api/gameplay/explored-fog", (FogUpdateRequest request, SaveManager saves, OverworldCombatSync combat) =>
+{
+    var data = combat.BuildSaveData();
+    data.ExploredFogBase64 = request.ExploredFogBase64 ?? "";
+    saves.Save(data);
+    return Results.Ok();
 });
 
 // Party REST
@@ -1322,7 +1338,7 @@ internal record P2PChatRequest(string? Channel, string Text);
 internal record P2PChatMessageResponse(string MessageId, string Channel, string SenderId, string SenderName, string Text, long Timestamp);
 internal record P2PShardResponse(
     string ShardId, byte ShardIndex, int PlayerCount, int MaxPlayers, bool IsAtCapacity);
-internal record P2PPositionUpdate(float X, float Y, float VelocityX, float VelocityY);
+internal record P2PPositionUpdate(float X, float Y, float VelocityX, float VelocityY, bool Relocate = false);
 internal record P2PNameRequest(string Name, string? Figure);
 
 // =============================================================================
@@ -1339,9 +1355,10 @@ internal record PlayerStatsResponse(
     int PrimaryCooldown, int SecondaryCooldown, int ShieldHp, bool IsShardHost,
     bool LoadoutLocked, string LastSavedAt);
 
-internal record BootstrapResponse(bool NeedsName, string DisplayName, bool OfflineMode, int Level, string Figure);
-internal record SettingsResponse(string DisplayName, bool OfflineMode, float MasterVolume, bool ShowGlyphOverlay, bool ShowFps, string LastSavedAt);
-internal record SettingsUpdateRequest(string? DisplayName, bool? OfflineMode, float? MasterVolume, bool? ShowGlyphOverlay, bool? ShowFps);
+internal record BootstrapResponse(bool NeedsName, string DisplayName, bool OfflineMode, int Level, string Figure, float LastX, float LastY, bool DevMode, string ExploredFogBase64);
+internal record SettingsResponse(string DisplayName, bool OfflineMode, float MasterVolume, bool ShowGlyphOverlay, bool ShowFps, bool DevMode, string LastSavedAt);
+internal record SettingsUpdateRequest(string? DisplayName, bool? OfflineMode, float? MasterVolume, bool? ShowGlyphOverlay, bool? ShowFps, bool? DevMode);
+internal record FogUpdateRequest(string? ExploredFogBase64);
 internal record PartyResponse(string? PartyId, string? LeaderPeerId, string[] MemberPeerIds, string[] PendingInvitePeerIds);
 internal record PartyInviteRequest(string TargetPeerId);
 internal record PartyAcceptRequest(string FromPeerId);
@@ -1448,6 +1465,7 @@ internal record DungeonEnterResponse(bool Started, DungeonInstanceResponse? Inst
 [JsonSerializable(typeof(BootstrapResponse))]
 [JsonSerializable(typeof(SettingsResponse))]
 [JsonSerializable(typeof(SettingsUpdateRequest))]
+[JsonSerializable(typeof(FogUpdateRequest))]
 [JsonSerializable(typeof(PartyResponse))]
 [JsonSerializable(typeof(PartyInviteRequest))]
 [JsonSerializable(typeof(PartyAcceptRequest))]

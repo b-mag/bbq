@@ -42,6 +42,7 @@ export const SECONDARY_ABILITIES: AbilityInfo[] = [
   { id: 'shadow_step', name: 'Shadow Step', type: 'Mobility', cost: 28, description: 'Short dash with invincibility frames.', color: '#303040' },
   { id: 'grim_howl', name: 'Grim Howl', type: 'Heal AoE', cost: 30, description: 'Modest group heal. Strong for party sustain.', color: '#906040' },
   { id: 'cinder_ward', name: 'Cinder Ward', type: 'Shield', cost: 32, description: 'Smoldering ward that absorbs hits.', color: '#c05020' },
+  { id: 'soul_projection', name: 'Soul Projection', type: 'Mobility', cost: 26, description: 'Spirit tears free and races through matter. Body stills; the wraith strikes along its path.', color: '#c8e8f0' },
 ];
 
 export default function AbilitySelectPanel({ currentPrimary, currentSecondary, onConfirm, onClose }: AbilitySelectPanelProps) {
@@ -65,6 +66,8 @@ export default function AbilitySelectPanel({ currentPrimary, currentSecondary, o
         border: '1px solid #4a8c8c',
         borderRadius: 8,
         minWidth: 500,
+        maxHeight: '90vh',
+        overflowY: 'auto',
       }}>
         {/* Header */}
         <h3 style={{

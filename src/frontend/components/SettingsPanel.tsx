@@ -17,6 +17,7 @@ export interface GameSettings {
   masterVolume: number;
   showGlyphOverlay: boolean;
   showFps: boolean;
+  devMode: boolean;
 }
 
 interface SettingsPanelProps {
@@ -52,6 +53,7 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
     masterVolume: 1,
     showGlyphOverlay: true,
     showFps: false,
+    devMode: false,
   });
   const [status, setStatus] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -68,6 +70,7 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
           masterVolume: typeof data.masterVolume === 'number' ? data.masterVolume : 1,
           showGlyphOverlay: data.showGlyphOverlay !== false,
           showFps: !!data.showFps,
+          devMode: !!data.devMode,
         });
       } catch { /* ignore */ }
     };
@@ -86,6 +89,7 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
           masterVolume: settings.masterVolume,
           showGlyphOverlay: settings.showGlyphOverlay,
           showFps: settings.showFps,
+          devMode: settings.devMode,
         }),
       });
       if (res.ok) {
@@ -96,6 +100,7 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
           masterVolume: saved.masterVolume ?? settings.masterVolume,
           showGlyphOverlay: saved.showGlyphOverlay !== false,
           showFps: !!saved.showFps,
+          devMode: !!saved.devMode,
         };
         setSettings(next);
         onSaved?.(next);
@@ -190,6 +195,20 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
             type="checkbox"
             checked={settings.showFps}
             onChange={e => setSettings(s => ({ ...s, showFps: e.target.checked }))}
+          />
+        </label>
+
+        <label style={{ ...rowStyle, cursor: 'pointer' }}>
+          <span style={{ color: '#e8dcc8', fontSize: '0.8rem' }}>
+            Dev
+            <span style={{ display: 'block', color: '#6a5d4a', fontSize: '0.65rem', marginTop: 2 }}>
+              Reveal the map and click-to-travel. Local only.
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            checked={settings.devMode}
+            onChange={e => setSettings(s => ({ ...s, devMode: e.target.checked }))}
           />
         </label>
 

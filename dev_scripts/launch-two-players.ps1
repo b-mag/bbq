@@ -6,8 +6,12 @@
 # the tracker so we can validate the manual glyph fallback flow.
 #
 # Starts:
-#   - Player 1: port 5000
-#   - Player 2: port 5001
+#   - Player 1: port 5000, glyph address 127.0.0.1:5000
+#   - Player 2: port 5001, glyph address 127.0.0.1:5001
+#
+# Glyphs are forced to loopback. Same-machine joins cannot use the STUN WAN IP
+# (NAT hairpin returns 404 / wrong host). For an internet test, run one exe
+# without --public-address so the glyph encodes the real public IP:port.
 #
 # Use this for testing:
 #   - glyph generation
@@ -32,8 +36,8 @@ Write-Host "  Launching Two Local Peer Test" -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Tracker override: $deadTrackerUrl" -ForegroundColor Yellow
-Write-Host "  Player 1:        http://localhost:5000" -ForegroundColor Green
-Write-Host "  Player 2:        http://localhost:5001" -ForegroundColor Green
+Write-Host "  Player 1:        http://localhost:5000  (glyph = 127.0.0.1:5000)" -ForegroundColor Green
+Write-Host "  Player 2:        http://localhost:5001  (glyph = 127.0.0.1:5001)" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Purpose:" -ForegroundColor Gray
 Write-Host "    - manual glyph connection test" -ForegroundColor Gray
@@ -43,7 +47,7 @@ Write-Host ""
 
 # Start Player 1
 $p1 = Start-Process -FilePath $backendExe `
-    -ArgumentList "--port=5000", "--name=Franz", "--matchmaking-url=$deadTrackerUrl" `
+    -ArgumentList "--port=5000", "--name=Franz", "--matchmaking-url=$deadTrackerUrl", "--public-address=127.0.0.1:5000" `
     -WorkingDirectory (Split-Path $backendExe) `
     -PassThru `
     -WindowStyle Normal
@@ -52,7 +56,7 @@ Start-Sleep -Seconds 3
 
 # Start Player 2
 $p2 = Start-Process -FilePath $backendExe `
-    -ArgumentList "--port=5001", "--name=Marina", "--matchmaking-url=$deadTrackerUrl" `
+    -ArgumentList "--port=5001", "--name=Marina", "--matchmaking-url=$deadTrackerUrl", "--public-address=127.0.0.1:5001" `
     -WorkingDirectory (Split-Path $backendExe) `
     -PassThru `
     -WindowStyle Normal
@@ -62,7 +66,8 @@ Write-Host "Both peers launched in tracker-disabled mode." -ForegroundColor Gree
 Write-Host "  Player 1 PID: $($p1.Id)" -ForegroundColor Gray
 Write-Host "  Player 2 PID: $($p2.Id)" -ForegroundColor Gray
 Write-Host ""
-Write-Host "Use the glyph route on either peer to connect manually:" -ForegroundColor White
+Write-Host "Open both UIs, copy Player 1's glyph, join from Player 2 (or the reverse)." -ForegroundColor White
+Write-Host "  Confirm Public Address logs show 127.0.0.1, not your WAN IP." -ForegroundColor Gray
 Write-Host "  http://localhost:5000/api/p2p/glyph" -ForegroundColor Gray
 Write-Host "  http://localhost:5001/api/p2p/glyph" -ForegroundColor Gray
 Write-Host ""

@@ -52,10 +52,11 @@ if (args.Contains("--help") || args.Contains("-h"))
     Console.WriteLine("Usage: Carcosa.Server [options]");
     Console.WriteLine();
     Console.WriteLine("Options:");
-    Console.WriteLine("  --port=<port>   Set the listening port (default: 5000)");
-    Console.WriteLine("  --headless      Run in server-only mode (no browser needed)");
-    Console.WriteLine("  --spawn-bots=N  Spawn N bot players on startup");
-    Console.WriteLine("  --help, -h      Show this help message");
+    Console.WriteLine("  --port=<port>                 Set the listening port (default: 5000)");
+    Console.WriteLine("  --public-address=<ip[:port]>  Override the address encoded in Glyphs");
+    Console.WriteLine("  --headless                    Run in server-only mode (no browser needed)");
+    Console.WriteLine("  --spawn-bots=N                Spawn N bot players on startup");
+    Console.WriteLine("  --help, -h                    Show this help message");
     return;
 }
 
@@ -93,6 +94,10 @@ var portArgOverride = args.FirstOrDefault(a => a.StartsWith("--port="));
 if (portArgOverride != null && int.TryParse(portArgOverride.AsSpan(7), out var cliPort)) port = cliPort;
 var botsArgOverride = args.FirstOrDefault(a => a.StartsWith("--spawn-bots="));
 if (botsArgOverride != null && int.TryParse(botsArgOverride.AsSpan(13), out var cliBots)) spawnBots = cliBots;
+string? manualPublicAddress = null;
+var publicAddressArg = args.FirstOrDefault(a => a.StartsWith("--public-address="));
+if (publicAddressArg != null)
+    manualPublicAddress = publicAddressArg["--public-address=".Length..];
 
 // Dungeon instance mode: when launched with --seed and --scenario, the server
 // generates a specific dungeon and auto-starts the game (no lobby needed).
@@ -119,7 +124,10 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 builder.Services.AddSingleton(peerExchangeSettings);
 builder.Services.AddSingleton<ConnectionManager>();
 builder.Services.AddSingleton<CryptolStore>();
-builder.Services.AddSingleton<NatTraversalService>();
+builder.Services.AddSingleton<UdpMeshTransport>();
+builder.Services.AddSingleton(sp => new NatTraversalService(
+    new UpnpPortMapper(),
+    sp.GetRequiredService<UdpMeshTransport>()));
 builder.Services.AddSingleton(new MatchmakingClient(matchmakingConfig, serverName, port));
 
 // P2P Mesh: Load or create our persistent peer identity, then register the mesh
@@ -129,7 +137,7 @@ var peerIdentity = PeerIdentityStore.LoadOrCreate(playerNameForPeer, port);
 Console.WriteLine($"[P2P] Peer ID: {peerIdentity.PeerId}, Protocol: {PeerProtocol.ProtocolVersion}, " +
     $"Game: {PeerProtocol.GameVersionString}");
 builder.Services.AddSingleton(peerIdentity);
-builder.Services.AddSingleton(new PeerMesh(peerIdentity));
+builder.Services.AddSingleton(sp => new PeerMesh(peerIdentity, sp.GetRequiredService<UdpMeshTransport>()));
 builder.Services.AddSingleton(sp => new SaveManager(peerIdentity.PeerId, port));
 builder.Services.AddSingleton(sp => new OverworldSync(
     sp.GetRequiredService<PeerMesh>(),
@@ -271,7 +279,7 @@ if (!string.IsNullOrWhiteSpace(savedProgress.DisplayName))
 // Ensure WorldId and PublicAddress are set before tracker registration
 var worldShard = app.Services.GetRequiredService<WorldShard>();
 var natTraversalService = app.Services.GetRequiredService<NatTraversalService>();
-peerIdentity.PublicAddress = await natTraversalService.DiscoverAndApplyAsync(peerIdentity, port);
+peerIdentity.PublicAddress = await natTraversalService.DiscoverAndApplyAsync(peerIdentity, port, manualPublicAddress);
 
 overworldSync.Start();
 
@@ -285,9 +293,17 @@ Console.WriteLine($"[P2P:Init] Local player '{peerIdentity.DisplayName}' Lv{comb
 Console.WriteLine($"[P2P:Init] Peer ID: {peerIdentity.PeerId}");
 Console.WriteLine($"[P2P:Init] World: {peerIdentity.WorldId}");
 Console.WriteLine($"[P2P:Init] Public Address: {peerIdentity.PublicAddress}");
+var glyphAddress = !string.IsNullOrEmpty(peerIdentity.StunMappedAddress)
+    ? peerIdentity.StunMappedAddress
+    : peerIdentity.PublicAddress;
+Console.WriteLine($"[P2P:Init] Glyph address: {glyphAddress}" +
+    (glyphAddress != peerIdentity.PublicAddress ? " (STUN UDP mapping)" : " (TCP listen port)"));
 
 // Auto-save every 60s from live combat state
 saveManager.StartAutoSave(() => combatSync.BuildSaveData());
+
+// Warm in-EXE overworld map so /api/p2p/map never depends on disk or first request
+OverworldBootstrap.Warm(PeerProtocol.GameVersionMajor);
 
 // Subscribe dungeon manager to mesh messages (singleton ctor hooks OnPeerMessage)
 _ = app.Services.GetRequiredService<DungeonInstanceManager>();
@@ -434,7 +450,14 @@ app.Map("/ws/peer", async (HttpContext context) =>
     var peerMesh = context.RequestServices.GetRequiredService<PeerMesh>();
     using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
 
-    await peerMesh.HandleInboundPeerAsync(webSocket, context.RequestAborted);
+    try
+    {
+        await peerMesh.HandleInboundPeerAsync(webSocket, context.RequestAborted);
+    }
+    catch (ObjectDisposedException)
+    {
+        // Handshake cleanup must not escape as an unhandled Kestrel exception.
+    }
 });
 
 // WHY: Single WebSocket endpoint at /ws. Each connection is a player session.
@@ -555,28 +578,11 @@ app.MapGet("/api/available-sessions", async (MatchmakingClient mm) =>
 
 // --- P2P Overworld State API (queried by local frontend) ---
 
-// Overworld map data is bundled with the peer client and versioned by major game version.
-// This keeps the mesh self-supporting when the tracker is offline.
+// Overworld map is compiled into the EXE (OverworldBootstrap) — works fully offline.
 app.MapGet("/api/p2p/map", () =>
 {
-    try
-    {
-        string json;
-        try
-        {
-            json = StaticOverworldAsset.LoadJson(PeerProtocol.GameVersionMajor);
-        }
-        catch (FileNotFoundException)
-        {
-            json = OverworldBootstrap.EnsureAssetJson(PeerProtocol.GameVersionMajor);
-        }
-        return Results.Content(json, "application/json");
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"[P2P:API] Map load failed: {ex.Message}");
-        return Results.NotFound();
-    }
+    var json = StaticOverworldAsset.LoadJson(PeerProtocol.GameVersionMajor);
+    return Results.Content(json, "application/json");
 });
 
 // Get all visible players in the overworld (local + remote peers)
@@ -734,12 +740,15 @@ app.MapGet("/api/p2p/status", (PeerMesh mesh, PeerIdentity identity) =>
 // Generate a Glyph code for this peer (so the player can share it)
 app.MapGet("/api/p2p/glyph", (PeerIdentity identity) =>
 {
+    var advertised = !string.IsNullOrEmpty(identity.StunMappedAddress)
+        ? identity.StunMappedAddress
+        : identity.PublicAddress;
     var glyph = GlyphCodec.GenerateForPeer(identity);
-    return Results.Ok(new P2PGlyphResponse(glyph, identity.WorldId, identity.PublicAddress));
+    return Results.Ok(new P2PGlyphResponse(glyph, identity.WorldId, advertised));
 });
 
 // Connect to a peer using a Glyph code (manual discovery)
-app.MapPost("/api/p2p/glyph/connect", async (GlyphConnectRequest request, PeerMesh mesh) =>
+app.MapPost("/api/p2p/glyph/connect", async (GlyphConnectRequest request, PeerMesh mesh, PeerIdentity identity, WorldShard worldShard) =>
 {
     var decoded = GlyphCodec.DecodeToAddress(request.Glyph);
     if (decoded == null)
@@ -747,6 +756,13 @@ app.MapPost("/api/p2p/glyph/connect", async (GlyphConnectRequest request, PeerMe
 
     var (address, worldIndex) = decoded.Value;
     Console.WriteLine($"[P2P:Glyph] Connecting to {address} (world index: {worldIndex}) from Glyph: {request.Glyph}");
+
+    if (PeerAddress.IsSelfAddress(address, identity))
+        return Results.BadRequest(new P2PErrorResponse("Glyph points at this machine — the other player must share theirs, and it must encode their public IP"));
+
+    var targetShard = WorldShard.GenerateShardId(worldIndex);
+    if (!string.Equals(identity.WorldId, targetShard, StringComparison.OrdinalIgnoreCase))
+        await worldShard.SwitchShardAsync(targetShard);
 
     var success = await mesh.ConnectToPeerAsync(address);
     return success
@@ -1020,6 +1036,7 @@ app.Lifetime.ApplicationStopping.Register(() =>
         Console.WriteLine($"[Save] Shutdown save failed: {ex.Message}");
     }
     gameLoop.Dispose();
+    app.Services.GetService<UdpMeshTransport>()?.Dispose();
 });
 
 Console.WriteLine("===========================================");

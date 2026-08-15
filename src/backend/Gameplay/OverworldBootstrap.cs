@@ -1,5 +1,5 @@
 // =============================================================================
-// OverworldBootstrap.cs — Bundled overworld for mesh peers (no matchmaking)
+// OverworldBootstrap.cs — In-EXE overworld for mesh peers (no matchmaking)
 // =============================================================================
 
 using System.Text.Json;
@@ -8,36 +8,63 @@ using System.Text.Json.Serialization;
 namespace Carcosa.Server.Gameplay;
 
 /// <summary>
-/// Generates and caches Assets/overworld-v{N}.json when missing so P2P map API works offline.
-/// Layout mirrors the Carcosa fishing-village / Lake Hali greybox (200×200).
+/// Deterministic overworld baked into the native binary via Generate().
+/// All peers on the same major version share the same map (fixed seed).
+/// Disk write under Assets/ is optional cache only — never required to serve the map.
 /// </summary>
 public static class OverworldBootstrap
 {
     public const int Width = 200;
     public const int Height = 200;
+    public const int DefaultSeed = 20240814;
 
-    public static string EnsureAssetJson(int majorVersion)
+    private static readonly object CacheLock = new();
+    private static string? _cachedJson;
+    private static int _cachedMajor = -1;
+
+    /// <summary>
+    /// Return the overworld JSON for the given major version.
+    /// Generated once in-process and cached; never throws for missing disk files.
+    /// </summary>
+    public static string GetOrCreateJson(int majorVersion)
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "Assets", $"overworld-v{majorVersion}.json");
-        if (File.Exists(path))
-            return File.ReadAllText(path);
+        lock (CacheLock)
+        {
+            if (_cachedJson != null && _cachedMajor == majorVersion)
+                return _cachedJson;
 
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var map = Generate(seed: 20240814);
-        var json = JsonSerializer.Serialize(map, OverworldBootstrapJsonContext.Default.BootstrapOverworldMap);
-        File.WriteAllText(path, json);
+            var map = Generate(DefaultSeed);
+            var json = JsonSerializer.Serialize(map, OverworldBootstrapJsonContext.Default.BootstrapOverworldMap);
+            _cachedJson = json;
+            _cachedMajor = majorVersion;
 
-        // Also try write to repo Assets for packaging
+            TryWriteDiskCache(majorVersion, json);
+            Console.WriteLine($"[Overworld] In-EXE map ready ({Width}x{Height}, seed {DefaultSeed}, v{majorVersion})");
+            return json;
+        }
+    }
+
+    /// <summary>Warm the in-memory cache at process startup.</summary>
+    public static void Warm(int majorVersion) => _ = GetOrCreateJson(majorVersion);
+
+    /// <summary>
+    /// Legacy name used by older call sites. Prefer <see cref="GetOrCreateJson"/>.
+    /// </summary>
+    public static string EnsureAssetJson(int majorVersion) => GetOrCreateJson(majorVersion);
+
+    private static void TryWriteDiskCache(int majorVersion, string json)
+    {
         try
         {
-            var repoAssets = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Assets"));
-            Directory.CreateDirectory(repoAssets);
-            File.WriteAllText(Path.Combine(repoAssets, $"overworld-v{majorVersion}.json"), json);
+            var path = Path.Combine(AppContext.BaseDirectory, "Assets", $"overworld-v{majorVersion}.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            if (!File.Exists(path))
+                File.WriteAllText(path, json);
         }
-        catch { /* ignore */ }
-
-        Console.WriteLine($"[Overworld] Generated bundled map at {path}");
-        return json;
+        catch
+        {
+            // Disk is optional — map is already in memory.
+        }
     }
 
     public static BootstrapOverworldMap Generate(int seed)
@@ -166,7 +193,7 @@ public sealed class BootstrapOverworldMap
     public int Seed { get; set; }
     public List<BootstrapLandmark> Landmarks { get; set; } = new();
     public List<BootstrapEntrance> DungeonEntrances { get; set; } = new();
-    public List<object> WorldObjects { get; set; } = new();
+    public List<BootstrapWorldObject> WorldObjects { get; set; } = new();
     public BootstrapPoint SpawnPoint { get; set; } = new();
 }
 
@@ -188,6 +215,14 @@ public sealed class BootstrapEntrance
     public int DungeonHeight { get; set; }
 }
 
+public sealed class BootstrapWorldObject
+{
+    public string Id { get; set; } = "";
+    public string Type { get; set; } = "";
+    public float X { get; set; }
+    public float Y { get; set; }
+}
+
 public sealed class BootstrapPoint
 {
     public int X { get; set; }
@@ -197,6 +232,8 @@ public sealed class BootstrapPoint
 [JsonSerializable(typeof(BootstrapOverworldMap))]
 [JsonSerializable(typeof(BootstrapLandmark))]
 [JsonSerializable(typeof(BootstrapEntrance))]
+[JsonSerializable(typeof(BootstrapWorldObject))]
+[JsonSerializable(typeof(List<BootstrapWorldObject>))]
 [JsonSerializable(typeof(BootstrapPoint))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal partial class OverworldBootstrapJsonContext : JsonSerializerContext;

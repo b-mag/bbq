@@ -62,11 +62,16 @@ public sealed class PeerIdentity
     public string WorldId { get; set; } = "";
 
     /// <summary>
-    /// Public network address (IP:port) that other peers can connect to.
-    /// Discovered at runtime via STUN or manual configuration.
-    /// Empty string if not yet determined.
+    /// Public TCP address (IP:listenPort) for tracker / WebSocket fallback.
     /// </summary>
     public string PublicAddress { get; set; } = "";
+
+    /// <summary>
+    /// STUN-mapped UDP address (IP:mappedPort) advertised in Glyphs.
+    /// Ephemeral — not persisted. Empty until NAT discovery runs.
+    /// </summary>
+    [JsonIgnore]
+    public string StunMappedAddress { get; set; } = "";
 
     /// <summary>
     /// The local listening port for peer connections.

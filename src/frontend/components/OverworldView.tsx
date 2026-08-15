@@ -202,19 +202,25 @@ export default function OverworldView({ playerName, onDisconnect, onEnterDungeon
     const loadMap = async () => {
       try {
         const res = await fetch('/api/p2p/map');
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.tilesBase64) {
-            const decoded = decodeOverworldMap(data);
-            setMap(decoded);
-            setDungeonEntrances(data.dungeonEntrances || []);
-            setWorldObjects(data.worldObjects || []);
-            setLandmarks(data.landmarks || []);
-            const spawnX = data.spawnPoint?.x ? data.spawnPoint.x + 0.5 : 100.5;
-            const spawnY = data.spawnPoint?.y ? data.spawnPoint.y + 0.5 : 180.5;
-            input.setInitialPosition(spawnX, spawnY);
-            console.log(`[Overworld] Map loaded via REST: ${data.width}x${data.height}, spawn at (${spawnX}, ${spawnY})`);
-          }
+        if (!res.ok) {
+          console.warn(`[Overworld] /api/p2p/map returned ${res.status}, will retry...`);
+          setTimeout(loadMap, 2000);
+          return;
+        }
+        const data = await res.json();
+        if (data && data.tilesBase64) {
+          const decoded = decodeOverworldMap(data);
+          setMap(decoded);
+          setDungeonEntrances(data.dungeonEntrances || []);
+          setWorldObjects(data.worldObjects || []);
+          setLandmarks(data.landmarks || []);
+          const spawnX = data.spawnPoint?.x ? data.spawnPoint.x + 0.5 : 100.5;
+          const spawnY = data.spawnPoint?.y ? data.spawnPoint.y + 0.5 : 180.5;
+          input.setInitialPosition(spawnX, spawnY);
+          console.log(`[Overworld] Map loaded via REST: ${data.width}x${data.height}, spawn at (${spawnX}, ${spawnY})`);
+        } else {
+          console.warn('[Overworld] /api/p2p/map missing tilesBase64, will retry...');
+          setTimeout(loadMap, 2000);
         }
       } catch (e) {
         console.warn('[Overworld] Failed to load map from /api/p2p/map, will retry...', e);

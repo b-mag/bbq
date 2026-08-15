@@ -198,21 +198,33 @@ public sealed class TrackerClient
                 var reflect = JsonSerializer.Deserialize(json, TrackerJsonContext.Default.TrackerReflectResponse);
                 if (reflect != null && !string.IsNullOrEmpty(reflect.Address))
                 {
-                    // Use reflected IP with our listen port
                     var ip = reflect.Address;
-                    // Normalize loopback addresses
-                    if (ip == "::1" || ip == "0.0.0.0" || ip == "0.0.0.1") ip = "127.0.0.1";
-                    _localIdentity.PublicAddress = $"{ip}:{_localIdentity.ListenPort}";
+                    if (PeerAddress.IsLoopbackHost(ip))
+                    {
+                        // Tracker saw loopback (common when the tracker is on this machine).
+                        // Keep STUN/UPnP discovery so glyphs do not regress to 127.0.0.1.
+                        if (!string.IsNullOrEmpty(_localIdentity.PublicAddress) &&
+                            !PeerAddress.IsLoopbackAddress(_localIdentity.PublicAddress))
+                        {
+                            return;
+                        }
+
+                        ip = "127.0.0.1";
+                    }
+
+                    var candidate = PeerAddress.Compose(ip, _localIdentity.ListenPort);
+                    if (!string.Equals(_localIdentity.PublicAddress, candidate, StringComparison.Ordinal))
+                        Console.WriteLine($"[P2P:Tracker] Reflected address: {candidate}");
+                    _localIdentity.PublicAddress = candidate;
                     return;
                 }
             }
         }
         catch { /* Fall through to default */ }
 
-        // Fallback: use 127.0.0.1 with our port (works for same-machine development)
         if (string.IsNullOrEmpty(_localIdentity.PublicAddress))
         {
-            _localIdentity.PublicAddress = $"127.0.0.1:{_localIdentity.ListenPort}";
+            _localIdentity.PublicAddress = PeerAddress.Compose("127.0.0.1", _localIdentity.ListenPort);
         }
     }
 

@@ -88,6 +88,9 @@ public sealed class PeerMessage
     public PeerDungeonStatePayload? DungeonState { get; set; }
     public PeerDungeonCompletePayload? DungeonComplete { get; set; }
     public PeerDungeonInputPayload? DungeonInput { get; set; }
+
+    // --- UDP hole punch ---
+    public PeerUdpPunchPayload? UdpPunch { get; set; }
 }
 
 /// <summary>
@@ -142,4 +145,7 @@ public static class PeerMessageTypes
     public const string DungeonState = "dungeon_state";
     public const string DungeonComplete = "dungeon_complete";
     public const string DungeonInput = "dungeon_input";
+
+    // UDP hole punch (glyph join over the STUN mapping)
+    public const string UdpPunch = "udp_punch";
 }

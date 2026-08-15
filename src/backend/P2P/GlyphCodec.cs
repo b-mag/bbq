@@ -292,7 +292,7 @@ public static class GlyphCodec
     }
 
     /// <summary>
-    /// Decode a V2 Glyph code.
+    /// Decode a V2 Glyph code (6-char packed suffix).
     /// </summary>
     public static (string ipAddress, int port, byte worldIndex)? DecodeV2(string glyph)
     {
@@ -301,31 +301,72 @@ public static class GlyphCodec
         var parts = glyph.Trim().ToUpperInvariant().Split('-');
         if (parts.Length != 3) return null;
 
-        var wordA = parts[0];
-        var wordB = parts[1];
-        var suffixFull = parts[2]; // 6 chars + 1 world char = 7
+        var suffixFull = parts[2];
+        if (suffixFull.Length != 7) return null;
 
-        if (suffixFull.Length < 7) return null;
-
-        var wordAIndex = Array.IndexOf(WordListA, wordA);
-        var wordBIndex = Array.IndexOf(WordListB, wordB);
+        var wordAIndex = Array.IndexOf(WordListA, parts[0]);
+        var wordBIndex = Array.IndexOf(WordListB, parts[1]);
         if (wordAIndex < 0 || wordBIndex < 0) return null;
 
-        var ip0 = (byte)wordAIndex;
-        var ip1 = (byte)wordBIndex;
-
-        var suffix = suffixFull[..6];
-        var worldChar = suffixFull[6];
-
-        var packed = FromBase36(suffix);
+        var packed = FromBase36(suffixFull[..6]);
         if (packed == null) return null;
 
         var port = (int)(packed.Value >> 16);
         var ip2 = (byte)((packed.Value >> 8) & 0xFF);
         var ip3 = (byte)(packed.Value & 0xFF);
-        var worldIndex = (byte)Base36Chars.IndexOf(worldChar);
+        var worldIndex = (byte)Base36Chars.IndexOf(suffixFull[6]);
+        return ($"{(byte)wordAIndex}.{(byte)wordBIndex}.{ip2}.{ip3}", port, worldIndex);
+    }
 
-        return ($"{ip0}.{ip1}.{ip2}.{ip3}", port, worldIndex);
+    /// <summary>
+    /// V3 glyph: 7-char packed suffix so ephemeral STUN UDP ports (up to 65535) round-trip.
+    /// </summary>
+    public static string EncodeV3(string ipAddress, int port, byte worldIndex = 0)
+    {
+        var octets = ipAddress.Split('.');
+        if (octets.Length != 4)
+            throw new ArgumentException($"Invalid IPv4 address: {ipAddress}");
+
+        var ip0 = byte.Parse(octets[0]);
+        var ip1 = byte.Parse(octets[1]);
+        var ip2 = byte.Parse(octets[2]);
+        var ip3 = byte.Parse(octets[3]);
+
+        var wordA = WordListA[ip0 % WordListA.Length];
+        var wordB = WordListB[ip1 % WordListB.Length];
+        uint packed = (uint)((port << 16) | (ip2 << 8) | ip3);
+        var suffix = ToBase36(packed, 7);
+        var worldChar = Base36Chars[worldIndex % 36];
+        return $"{wordA}-{wordB}-{suffix}{worldChar}";
+    }
+
+    /// <summary>
+    /// Decode a V3 Glyph (7-char packed suffix so ephemeral UDP ports round-trip).
+    /// </summary>
+    public static (string ipAddress, int port, byte worldIndex)? DecodeV3(string glyph)
+    {
+        if (string.IsNullOrWhiteSpace(glyph)) return null;
+
+        var parts = glyph.Trim().ToUpperInvariant().Split('-');
+        if (parts.Length != 3) return null;
+
+        var wordA = parts[0];
+        var wordB = parts[1];
+        var suffixFull = parts[2];
+        if (suffixFull.Length < 8) return null;
+
+        var wordAIndex = Array.IndexOf(WordListA, wordA);
+        var wordBIndex = Array.IndexOf(WordListB, wordB);
+        if (wordAIndex < 0 || wordBIndex < 0) return null;
+
+        var packed = FromBase36(suffixFull[..7]);
+        if (packed == null) return null;
+
+        var port = (int)(packed.Value >> 16);
+        var ip2 = (byte)((packed.Value >> 8) & 0xFF);
+        var ip3 = (byte)(packed.Value & 0xFF);
+        var worldIndex = (byte)Base36Chars.IndexOf(suffixFull[7]);
+        return ($"{(byte)wordAIndex}.{(byte)wordBIndex}.{ip2}.{ip3}", port, worldIndex);
     }
 
     // =========================================================================
@@ -335,7 +376,7 @@ public static class GlyphCodec
     /// <summary>
     /// Convert a uint to a fixed-length base-36 string.
     /// </summary>
-    private static string ToBase36(uint value, int length)
+    private static string ToBase36(ulong value, int length)
     {
         var chars = new char[length];
         for (int i = length - 1; i >= 0; i--)
@@ -346,12 +387,9 @@ public static class GlyphCodec
         return new string(chars);
     }
 
-    /// <summary>
-    /// Convert a base-36 string back to a uint.
-    /// </summary>
-    private static uint? FromBase36(string str)
+    private static ulong? FromBase36(string str)
     {
-        uint result = 0;
+        ulong result = 0;
         foreach (var c in str)
         {
             var idx = Base36Chars.IndexOf(c);
@@ -367,15 +405,19 @@ public static class GlyphCodec
 
     /// <summary>
     /// Generate a Glyph for the local peer's current address and world.
-    /// Uses the V2 encoding (preferred). Returns a fallback string if the
-    /// address is not a valid IPv4 format (e.g., hostname-based addresses).
+    /// Prefers the STUN-mapped UDP address (V3 encoding). Returns a fallback
+    /// string if the address is not a valid IPv4 format.
     /// </summary>
     public static string GenerateForPeer(PeerIdentity identity)
     {
-        if (string.IsNullOrEmpty(identity.PublicAddress))
+        if (string.IsNullOrEmpty(identity.PublicAddress) && string.IsNullOrEmpty(identity.StunMappedAddress))
             return "NO-ADDRESS-AVAILABLE";
 
-        var parts = identity.PublicAddress.Split(':');
+        var advertised = !string.IsNullOrEmpty(identity.StunMappedAddress)
+            ? identity.StunMappedAddress
+            : identity.PublicAddress;
+
+        var parts = advertised.Split(':');
         if (parts.Length != 2 || !int.TryParse(parts[1], out var port))
             return "INVALID-ADDRESS";
 
@@ -384,37 +426,39 @@ public static class GlyphCodec
         // Resolve hostnames to IPv4 (e.g., "localhost" → "127.0.0.1")
         if (!System.Net.IPAddress.TryParse(ip, out var parsed))
         {
-            // It's a hostname — try to resolve it
             try
             {
                 var addresses = System.Net.Dns.GetHostAddresses(ip);
                 var ipv4 = addresses.FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
                 if (ipv4 != null)
-                {
                     ip = ipv4.ToString();
-                }
                 else
-                {
                     return "HOSTNAME-NOT-RESOLVED";
-                }
             }
             catch
             {
                 return "HOSTNAME-NOT-RESOLVED";
             }
         }
+        else if (parsed.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+        {
+            if (parsed.IsIPv4MappedToIPv6)
+                ip = parsed.MapToIPv4().ToString();
+            else if (System.Net.IPAddress.IsLoopback(parsed))
+                ip = "127.0.0.1";
+            else
+                return "IPV6-NOT-SUPPORTED";
+        }
         else
         {
-            // Normalize IPv6 loopback to IPv4
-            ip = parsed.MapToIPv4().ToString();
+            ip = parsed.ToString();
         }
 
-        // Extract world index from world ID (simple hash to 0-255)
-        var worldIndex = (byte)(identity.WorldId.GetHashCode() & 0xFF);
+        var worldIndex = WorldShard.ParseShardIndex(identity.WorldId);
 
         try
         {
-            return EncodeV2(ip, port, worldIndex);
+            return EncodeV3(ip, port, worldIndex);
         }
         catch
         {
@@ -427,7 +471,7 @@ public static class GlyphCodec
     /// </summary>
     public static (string address, byte worldIndex)? DecodeToAddress(string glyph)
     {
-        var result = DecodeV2(glyph);
+        var result = DecodeV3(glyph) ?? DecodeV2(glyph);
         if (result == null) return null;
 
         var (ip, port, worldIndex) = result.Value;

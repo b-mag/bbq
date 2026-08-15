@@ -1,17 +1,17 @@
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
+using System.Security.Cryptography;
 
 namespace Carcosa.Server.P2P;
 
 /// <summary>
-/// Handles STUN discovery for finding the public-facing IP:port behind NAT.
-/// Includes a parser for the STUN Binding Success response and a lightweight
-/// public STUN client for practical discovery in real deployments.
+/// Discovers the address advertised in Glyphs. STUN runs on the shared UDP
+/// mesh socket so the mapped port is the one friends punch. TCP listen port
+/// stays on PublicAddress for tracker / WebSocket fallback.
 /// </summary>
 public sealed class NatTraversalService
 {
-    private static readonly string[] DefaultStunServers =
+    public static readonly string[] StunServers =
     [
         "stun.l.google.com:19302",
         "stun1.l.google.com:19302",
@@ -20,58 +20,172 @@ public sealed class NatTraversalService
         "stun4.l.google.com:19302",
     ];
 
+    private const uint StunMagicCookie = 0x2112A442;
+    private const ushort StunBindingSuccess = 0x0101;
+    private const ushort AttrMappedAddress = 0x0001;
+    private const ushort AttrXorMappedAddress = 0x0020;
+
+    private readonly UpnpPortMapper _upnp;
+    private readonly UdpMeshTransport? _udp;
+
+    public NatTraversalService() : this(new UpnpPortMapper(), null) { }
+
+    public NatTraversalService(UpnpPortMapper upnp, UdpMeshTransport? udp = null)
+    {
+        _upnp = upnp ?? throw new ArgumentNullException(nameof(upnp));
+        _udp = udp;
+    }
+
     /// <summary>
-    /// Attempts to discover the peer's public address using a public STUN server.
-    /// Falls back to localhost when no STUN result can be obtained.
+    /// UPnP-map the listen port, STUN-discover the public mapping on the UDP
+    /// mesh socket, set PublicAddress to ip:listenPort (TCP) and StunMappedAddress
+    /// to the UDP mapping used in Glyphs.
     /// </summary>
-    public async Task<string> DiscoverAndApplyAsync(PeerIdentity identity, int listenPort, CancellationToken cancellationToken = default)
+    public async Task<string> DiscoverAndApplyAsync(
+        PeerIdentity identity,
+        int listenPort,
+        string? manualPublicAddress = null,
+        CancellationToken cancellationToken = default)
     {
         if (identity == null) throw new ArgumentNullException(nameof(identity));
 
-        var discovered = await TryDiscoverPublicAddressAsync(listenPort, cancellationToken);
-        if (!string.IsNullOrWhiteSpace(discovered))
+        if (!string.IsNullOrWhiteSpace(manualPublicAddress))
         {
-            identity.PublicAddress = discovered;
-            return discovered;
+            identity.PublicAddress = PeerAddress.NormalizeManualAddress(manualPublicAddress, listenPort);
+            identity.StunMappedAddress = identity.PublicAddress;
+            Console.WriteLine($"[P2P:NAT] Using manual public address: {identity.PublicAddress}");
+            try
+            {
+                _udp?.Start(listenPort);
+                await _upnp.TryMapTcpPortAsync(listenPort, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[P2P:NAT] UPnP mapping failed: {ex.Message}");
+            }
+
+            return identity.PublicAddress;
         }
 
-        identity.PublicAddress = $"127.0.0.1:{listenPort}";
+        try { _udp?.Start(listenPort); }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[P2P:NAT] UDP mesh bind failed: {ex.Message}");
+        }
+
+        string? upnpIp = null;
+        try
+        {
+            var upnp = await _upnp.TryMapTcpPortAsync(listenPort, cancellationToken);
+            if (upnp.Mapped)
+            {
+                upnpIp = upnp.ExternalIp;
+                Console.WriteLine("[P2P:NAT] UPnP TCP port mapping succeeded");
+            }
+            else
+            {
+                Console.WriteLine("[P2P:NAT] UPnP port mapping not available (router may need a manual TCP forward)");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[P2P:NAT] UPnP failed: {ex.Message}");
+        }
+
+        string? stunIp = null;
+        string? stunMapped = null;
+        try
+        {
+            if (_udp != null)
+            {
+                stunMapped = await _udp.DiscoverStunMappedAddressAsync(cancellationToken);
+                if (!string.IsNullOrEmpty(stunMapped) && PeerAddress.TrySplit(stunMapped, out var mappedHost, out _))
+                {
+                    stunIp = mappedHost;
+                    Console.WriteLine($"[P2P:NAT] STUN mapped UDP {stunMapped} (glyph will use this port, TCP fallback {listenPort})");
+                }
+            }
+
+            if (string.IsNullOrEmpty(stunIp))
+            {
+                stunIp = await TryDiscoverPublicIpAsync(cancellationToken);
+                if (!string.IsNullOrEmpty(stunIp))
+                    Console.WriteLine($"[P2P:NAT] STUN public IP: {stunIp} (no mapped UDP socket; glyph will use TCP port {listenPort})");
+                else
+                    Console.WriteLine("[P2P:NAT] STUN discovery failed");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[P2P:NAT] STUN failed: {ex.Message}");
+        }
+
+        var ip = SelectAdvertisedIp(stunIp, upnpIp) ?? PeerAddress.TryGetLocalIpv4();
+        if (string.IsNullOrEmpty(ip))
+        {
+            Console.WriteLine("[P2P:NAT] No public or LAN IPv4 found; glyphs will encode loopback (remote joins will fail)");
+            ip = "127.0.0.1";
+        }
+        else if (!PeerAddress.IsPublicUnicastIpv4(ip))
+        {
+            Console.WriteLine($"[P2P:NAT] Advertising LAN address {ip}:{listenPort}. Remote internet joins need UPnP or a manual TCP {listenPort} forward.");
+        }
+
+        identity.PublicAddress = PeerAddress.Compose(ip, listenPort);
+        identity.StunMappedAddress = !string.IsNullOrEmpty(stunMapped)
+            ? stunMapped
+            : identity.PublicAddress;
         return identity.PublicAddress;
     }
 
     /// <summary>
-    /// Tries to discover a public IP:port using the STUN binding request flow.
-    /// Returns null if no public address could be resolved.
+    /// Query public STUN servers for the public IPv4 on a throwaway socket.
+    /// Used when the mesh UDP socket could not discover a mapping.
     /// </summary>
-    public async Task<string?> TryDiscoverPublicAddressAsync(int listenPort, CancellationToken cancellationToken = default)
+    public async Task<string?> TryDiscoverPublicIpAsync(CancellationToken cancellationToken = default)
     {
-        foreach (var server in DefaultStunServers)
+        foreach (var server in StunServers)
         {
+            if (cancellationToken.IsCancellationRequested) return null;
+
             try
             {
-                var endpoint = ParseServerEndpoint(server);
+                var endpoint = ParseStunServer(server);
                 if (endpoint == null) continue;
 
                 using var udpClient = new UdpClient();
                 udpClient.Client.ReceiveTimeout = 2000;
                 udpClient.Client.SendTimeout = 2000;
 
-                var request = CreateBindingRequest();
+                var request = CreateStunBindingRequest();
                 await udpClient.SendAsync(request, request.Length, endpoint.Address.ToString(), endpoint.Port);
 
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeoutCts.CancelAfter(2000);
 
                 var result = await udpClient.ReceiveAsync(timeoutCts.Token);
-                var data = result.Buffer;
-                if (TryParseMappedAddress(data, out var mappedAddress))
+                if (TryParseMappedEndpoint(result.Buffer, out var ip, out _) &&
+                    !string.IsNullOrEmpty(ip) &&
+                    !PeerAddress.IsLoopbackHost(ip))
                 {
-                    return mappedAddress;
+                    return ip;
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return null;
             }
             catch (OperationCanceledException)
             {
-                break;
+                // Per-server timeout — try the next STUN host.
             }
             catch (SocketException)
             {
@@ -86,137 +200,161 @@ public sealed class NatTraversalService
         return null;
     }
 
-    /// <summary>
-    /// Parses a STUN Binding Success response and returns the mapped public address.
-    /// Example response: "127.0.0.1:60000".
-    /// </summary>
+    /// <summary>Kept for tests and older call sites. Prefer <see cref="TryParseMappedEndpoint"/>.</summary>
     public static bool TryParseMappedAddress(byte[] response, out string? mappedAddress)
     {
+        if (TryParseMappedEndpoint(response, out var ip, out var port) && ip != null)
+        {
+            mappedAddress = PeerAddress.Compose(ip, port);
+            return true;
+        }
+
         mappedAddress = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Parses a STUN Binding Success response. Prefers XOR-MAPPED-ADDRESS (RFC 5389),
+    /// which is what Google public STUN servers send.
+    /// </summary>
+    public static bool TryParseMappedEndpoint(byte[] response, out string? ip, out int port)
+    {
+        ip = null;
+        port = 0;
         if (response == null || response.Length < 20)
-        {
             return false;
-        }
 
-        // STUN message header: 20 bytes
-        // 0-1: message type, 2-3: message length, 4-19: magic cookie + transaction ID
         var messageType = (ushort)((response[0] << 8) | response[1]);
-
-        // STUN Binding Success Response is 0x0101.
-        if (messageType != 0x0101)
-        {
+        if (messageType != StunBindingSuccess)
             return false;
-        }
 
         var messageLength = (ushort)((response[2] << 8) | response[3]);
-        if (response.Length < 20)
-        {
-            return false;
-        }
-
-        // Some valid responses may include a length header that is not fully trusted
-        // for the purposes of attribute scanning, especially when testing with a
-        // minimal fixture. The important part is that the response contains the
-        // MAPPED-ADDRESS attribute payload we need.
-        var offset = 20;
-
         if (messageLength > 0 && response.Length < 20 + messageLength)
-        {
             return false;
-        }
-        while (offset + 4 <= response.Length)
+
+        string? xorIp = null;
+        int xorPort = 0;
+        string? mappedIp = null;
+        int mappedPort = 0;
+
+        var offset = 20;
+        var end = messageLength > 0 ? Math.Min(response.Length, 20 + messageLength) : response.Length;
+        while (offset + 4 <= end)
         {
             var attributeType = (ushort)((response[offset] << 8) | response[offset + 1]);
             var attributeLength = (ushort)((response[offset + 2] << 8) | response[offset + 3]);
             var valueOffset = offset + 4;
             var valueEnd = valueOffset + attributeLength;
-
             if (valueEnd > response.Length)
-            {
                 break;
-            }
 
-            if (attributeType == 0x0001 || attributeType == 0x0002)
+            if (attributeType == AttrXorMappedAddress)
             {
-                if (attributeLength < 8)
+                if (TryReadAddress(response, valueOffset, attributeLength, xorWithCookie: true, out var parsedIp, out var parsedPort))
                 {
-                    return false;
+                    xorIp = parsedIp;
+                    xorPort = parsedPort;
                 }
-
-                // RFC 3489/5389 layout for IPv4 MAPPED-ADDRESS:
-                // 00 00 [reserved], 00 01 [IPv4 family], port (2 bytes), IP (4 bytes)
-                var family = response[valueOffset + 1];
-                if (family != 0x01)
+            }
+            else if (attributeType is AttrMappedAddress or 0x0002)
+            {
+                if (TryReadAddress(response, valueOffset, attributeLength, xorWithCookie: false, out var parsedIp, out var parsedPort))
                 {
-                    return false;
+                    mappedIp = parsedIp;
+                    mappedPort = parsedPort;
                 }
-
-                var port = (ushort)((response[valueOffset + 2] << 8) | response[valueOffset + 3]);
-                var ip = string.Join('.',
-                    response[valueOffset + 4],
-                    response[valueOffset + 5],
-                    response[valueOffset + 6],
-                    response[valueOffset + 7]);
-
-                mappedAddress = $"{ip}:{port}";
-                return true;
             }
 
             offset = valueEnd;
+            var pad = (4 - (attributeLength % 4)) % 4;
+            offset += pad;
+        }
+
+        if (xorIp != null)
+        {
+            ip = xorIp;
+            port = xorPort;
+            return true;
+        }
+
+        if (mappedIp != null)
+        {
+            ip = mappedIp;
+            port = mappedPort;
+            return true;
         }
 
         return false;
     }
 
-    private static IPEndPoint? ParseServerEndpoint(string server)
+    public static string? SelectAdvertisedIp(string? stunIp, string? upnpIp)
+    {
+        if (!string.IsNullOrEmpty(stunIp) && PeerAddress.IsPublicUnicastIpv4(stunIp))
+            return stunIp;
+        if (!string.IsNullOrEmpty(upnpIp) && PeerAddress.IsPublicUnicastIpv4(upnpIp))
+            return upnpIp;
+        if (!string.IsNullOrEmpty(upnpIp) && !PeerAddress.IsLoopbackHost(upnpIp))
+            return upnpIp;
+        if (!string.IsNullOrEmpty(stunIp) && !PeerAddress.IsLoopbackHost(stunIp))
+            return stunIp;
+        return null;
+    }
+
+    private static bool TryReadAddress(
+        byte[] response, int valueOffset, int attributeLength, bool xorWithCookie, out string? ip, out int port)
+    {
+        ip = null;
+        port = 0;
+        if (attributeLength < 8)
+            return false;
+
+        var family = response[valueOffset + 1];
+        if (family != 0x01) // IPv4 only — Glyphs cannot encode IPv6
+            return false;
+
+        var rawPort = (ushort)((response[valueOffset + 2] << 8) | response[valueOffset + 3]);
+        var b0 = response[valueOffset + 4];
+        var b1 = response[valueOffset + 5];
+        var b2 = response[valueOffset + 6];
+        var b3 = response[valueOffset + 7];
+
+        if (xorWithCookie)
+        {
+            rawPort ^= (ushort)(StunMagicCookie >> 16);
+            b0 ^= 0x21;
+            b1 ^= 0x12;
+            b2 ^= 0xA4;
+            b3 ^= 0x42;
+        }
+
+        port = rawPort;
+        ip = $"{b0}.{b1}.{b2}.{b3}";
+        return true;
+    }
+
+    public static IPEndPoint? ParseStunServer(string server)
     {
         var parts = server.Split(':', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length != 2 || !int.TryParse(parts[1], out var port))
-        {
             return null;
-        }
 
         var addresses = Dns.GetHostAddresses(parts[0]);
         var ip = addresses.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
-        if (ip == null)
-        {
-            return null;
-        }
-
-        return new IPEndPoint(ip, port);
+        return ip == null ? null : new IPEndPoint(ip, port);
     }
 
-    private static byte[] CreateBindingRequest()
+    public static byte[] CreateStunBindingRequest()
     {
         var request = new byte[20];
-
-        // STUN message type: Binding Request (0x0001)
         request[0] = 0x00;
         request[1] = 0x01;
-
-        // Message length: 0
         request[2] = 0x00;
         request[3] = 0x00;
-
-        // Magic cookie: 0x2112A442
         request[4] = 0x21;
         request[5] = 0x12;
         request[6] = 0xA4;
         request[7] = 0x42;
-
-        // 12-byte transaction ID
-        var txn = Encoding.ASCII.GetBytes("CARCOSA-1");
-        if (txn.Length < 12)
-        {
-            Array.Copy(txn, 0, request, 8, txn.Length);
-            for (var i = txn.Length; i < 12; i++)
-            {
-                request[8 + i] = (byte)(i + 1);
-            }
-            return request;
-        }
-
-        Array.Copy(txn, 0, request, 8, 12);
+        RandomNumberGenerator.Fill(request.AsSpan(8, 12));
         return request;
     }
 }

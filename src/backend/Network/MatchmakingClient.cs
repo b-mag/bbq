@@ -72,12 +72,16 @@ public sealed class MatchmakingClient : IDisposable
         _config = config;
         _serverName = serverName;
         _port = port;
-        _http = new HttpClient
-        {
-            BaseAddress = new Uri(config.Url),
-            Timeout = TimeSpan.FromSeconds(5)
-        };
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+
+        // Empty / invalid URL (e.g. offline template) must not crash DI with new Uri("").
+        if (HasUsableUrl(config.Url))
+            _http.BaseAddress = new Uri(config.Url.TrimEnd('/') + "/");
     }
+
+    private static bool HasUsableUrl(string? url) =>
+        !string.IsNullOrWhiteSpace(url) && Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     /// <summary>
     /// Check if the matchmaking service is reachable. Updates IsOnline.
@@ -85,15 +89,19 @@ public sealed class MatchmakingClient : IDisposable
     /// </summary>
     public async Task<bool> CheckOnlineAsync()
     {
-        if (!_config.Enabled)
+        if (!_config.Enabled || !HasUsableUrl(_config.Url) || _http.BaseAddress == null)
         {
             IsOnline = false;
+            if (!_config.Enabled)
+                Console.WriteLine("[Matchmaking] Disabled (standalone mode)");
+            else
+                Console.WriteLine("[Matchmaking] No valid URL configured (standalone mode)");
             return false;
         }
 
         try
         {
-            var response = await _http.GetAsync("/api/health");
+            var response = await _http.GetAsync("api/health");
             IsOnline = response.IsSuccessStatusCode;
             if (IsOnline) LastContact = DateTime.UtcNow;
             Console.WriteLine($"[Matchmaking] Service {(IsOnline ? "ONLINE" : "OFFLINE")} at {_config.Url}");
@@ -113,7 +121,7 @@ public sealed class MatchmakingClient : IDisposable
     /// </summary>
     public void StartHeartbeat(Func<SessionHeartbeatData> getSessionData)
     {
-        if (!IsOnline || _heartbeatCts != null) return;
+        if (!IsOnline || _heartbeatCts != null || _http.BaseAddress == null) return;
 
         _heartbeatCts = new CancellationTokenSource();
         var token = _heartbeatCts.Token;
@@ -126,7 +134,7 @@ public sealed class MatchmakingClient : IDisposable
                 try
                 {
                     var data = getSessionData();
-                    await _http.PostAsJsonAsync("/api/sessions/heartbeat", data, MatchmakingClientJson.Default.SessionHeartbeatData, token);
+                    await _http.PostAsJsonAsync("api/sessions/heartbeat", data, MatchmakingClientJson.Default.SessionHeartbeatData, token);
                     LastContact = DateTime.UtcNow;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -158,11 +166,11 @@ public sealed class MatchmakingClient : IDisposable
     /// </summary>
     public async Task<List<AvailableSession>> GetAvailableSessionsAsync()
     {
-        if (!IsOnline) return new List<AvailableSession>();
+        if (!IsOnline || _http.BaseAddress == null) return new List<AvailableSession>();
 
         try
         {
-            var response = await _http.GetAsync("/api/sessions");
+            var response = await _http.GetAsync("api/sessions");
             if (response.IsSuccessStatusCode)
             {
                 var sessions = await response.Content.ReadFromJsonAsync(

@@ -27,9 +27,11 @@
 //   Any error at any stage → Disconnected (triggers OnDisconnected event)
 // =============================================================================
 
+using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace Carcosa.Server.P2P;
 
@@ -60,8 +62,12 @@ public sealed class PeerConnection : IDisposable
 
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private WebSocket? _webSocket;
+    private UdpMeshTransport? _udp;
+    private IPEndPoint? _udpRemote;
+    private Channel<PeerMessage>? _udpInbox;
     private CancellationTokenSource? _cts;
     private int _state = (int)PeerConnectionState.Created;
+    private int _disposed;
 
     // =========================================================================
     // PROPERTIES
@@ -81,6 +87,9 @@ public sealed class PeerConnection : IDisposable
 
     /// <summary>Whether this is an outbound (we initiated) or inbound connection.</summary>
     public bool IsOutbound { get; init; }
+
+    /// <summary>True when this link is the UDP hole-punched path, not WebSocket.</summary>
+    public bool IsUdp => _udp != null;
 
     /// <summary>Current connection state.</summary>
     public PeerConnectionState State =>
@@ -128,6 +137,31 @@ public sealed class PeerConnection : IDisposable
         _cts = new CancellationTokenSource();
         TransitionState(PeerConnectionState.Handshaking);
         ConnectedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Attach to the shared UDP mesh socket after a hole punch. Receive is
+    /// demuxed by remote endpoint into an inbox channel.
+    /// </summary>
+    public void AttachUdp(UdpMeshTransport transport, IPEndPoint remote)
+    {
+        _udp = transport;
+        _udpRemote = remote;
+        _udpInbox = Channel.CreateUnbounded<PeerMessage>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false,
+        });
+        _cts = new CancellationTokenSource();
+        transport.Register(remote, DeliverUdp);
+        TransitionState(PeerConnectionState.Handshaking);
+        ConnectedAt = DateTime.UtcNow;
+    }
+
+    internal void DeliverUdp(PeerMessage message)
+    {
+        LastMessageAt = DateTime.UtcNow;
+        _udpInbox?.Writer.TryWrite(message);
     }
 
     /// <summary>
@@ -184,6 +218,18 @@ public sealed class PeerConnection : IDisposable
     /// </summary>
     public async Task<PeerMessage?> ReceiveSingleAsync(CancellationToken ct)
     {
+        if (_udpInbox != null)
+        {
+            try
+            {
+                return await _udpInbox.Reader.ReadAsync(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
+        }
+
         if (_webSocket == null || _webSocket.State != WebSocketState.Open)
             return null;
 
@@ -212,6 +258,17 @@ public sealed class PeerConnection : IDisposable
     /// <returns>True if sent successfully, false if connection is dead.</returns>
     public async Task<bool> SendAsync(PeerMessage message)
     {
+        if (_udp != null && _udpRemote != null)
+        {
+            var sent = await _udp.SendAsync(_udpRemote, message);
+            if (sent)
+            {
+                var payload = JsonSerializer.Serialize(message, PeerJsonContext.Default.PeerMessage);
+                Interlocked.Add(ref _bytesSent, payload.Length);
+            }
+            return sent;
+        }
+
         if (_webSocket == null || _webSocket.State != WebSocketState.Open)
             return false;
 
@@ -249,6 +306,24 @@ public sealed class PeerConnection : IDisposable
     /// </summary>
     public async Task ReceiveLoopAsync()
     {
+        if (_udpInbox != null && _cts != null)
+        {
+            try
+            {
+                await foreach (var message in _udpInbox.Reader.ReadAllAsync(_cts.Token))
+                {
+                    LastMessageAt = DateTime.UtcNow;
+                    OnMessageReceived?.Invoke(this, message);
+                }
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                await DisconnectAsync("connection_closed");
+            }
+            return;
+        }
+
         if (_webSocket == null || _cts == null) return;
 
         var buffer = new byte[8192];
@@ -304,7 +379,12 @@ public sealed class PeerConnection : IDisposable
 
         Console.WriteLine($"[P2P:Connection] Disconnected from {RemotePeerId} ({reason})");
 
-        _cts?.Cancel();
+        try { _cts?.Cancel(); }
+        catch (ObjectDisposedException) { }
+
+        if (_udpRemote != null)
+            _udp?.Unregister(_udpRemote);
+        _udpInbox?.Writer.TryComplete();
 
         try
         {
@@ -356,9 +436,18 @@ public sealed class PeerConnection : IDisposable
 
     public void Dispose()
     {
-        _cts?.Cancel();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        try { _cts?.Cancel(); }
+        catch (ObjectDisposedException) { }
+        if (_udpRemote != null)
+            _udp?.Unregister(_udpRemote);
+        _udpInbox?.Writer.TryComplete();
         _cts?.Dispose();
-        _webSocket?.Dispose();
+        _cts = null;
+        try { _webSocket?.Dispose(); }
+        catch { }
         _sendLock.Dispose();
     }
 }

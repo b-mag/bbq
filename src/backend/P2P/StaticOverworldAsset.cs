@@ -1,30 +1,22 @@
+using Carcosa.Server.Gameplay;
+
 namespace Carcosa.Server.P2P;
 
 /// <summary>
-/// Provides a versioned static overworld asset for peer-hosted games.
-/// All peers in the same major game version share the same base map.
+/// Provides a versioned overworld map for peer-hosted games.
+/// The map is generated in-process (compiled into the EXE) so solo/offline
+/// play never depends on a sidecar Assets file.
 /// </summary>
 public static class StaticOverworldAsset
 {
     public static string GetPreferredAssetPath(int majorVersion)
     {
-        var baseDir = AppContext.BaseDirectory;
-        var candidate = Path.Combine(baseDir, "Assets", $"overworld-v{majorVersion}.json");
-        if (File.Exists(candidate)) return candidate;
-
-        // Fallback for source-root/dev execution when running directly from the repo.
-        var repoRelative = Path.Combine(baseDir, "..", "..", "..", "..", "Assets", $"overworld-v{majorVersion}.json");
-        return Path.GetFullPath(repoRelative);
+        return Path.Combine(AppContext.BaseDirectory, "Assets", $"overworld-v{majorVersion}.json");
     }
 
-    public static string LoadJson(int majorVersion)
-    {
-        var path = GetPreferredAssetPath(majorVersion);
-        if (!File.Exists(path))
-        {
-            throw new FileNotFoundException($"Static overworld asset not found for game major version {majorVersion}: {path}");
-        }
-
-        return File.ReadAllText(path);
-    }
+    /// <summary>
+    /// Load overworld JSON. Always succeeds via in-EXE bootstrap.
+    /// Optional on-disk Assets/ file is used only as a best-effort cache by OverworldBootstrap.
+    /// </summary>
+    public static string LoadJson(int majorVersion) => OverworldBootstrap.GetOrCreateJson(majorVersion);
 }

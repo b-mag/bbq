@@ -37,3 +37,7 @@ Thumbs.db
 # === Testing / Coverage ===
 coverage/
 *.lcov
+
+# ==== Junk folder I'll put stuff temporarily
+/inspire_delete/
+raw_assets/

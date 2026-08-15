@@ -91,6 +91,21 @@ public sealed class PeerHandshakeResponsePayload
     public string PublicAddress { get; set; } = "";
 }
 
+/// <summary>
+/// UDP hole-punch hello. The joiner sends this to the glyph's STUN-mapped
+/// address; the host replies with Ack=true from the same socket (opens the NAT).
+/// Payload also carries TCP/UDP candidates so the host can punch back.
+/// </summary>
+public sealed class PeerUdpPunchPayload
+{
+    public required string PeerId { get; init; }
+    public string DisplayName { get; set; } = "";
+    public string TcpAddress { get; set; } = "";
+    public string UdpAddress { get; set; } = "";
+    public string WorldId { get; set; } = "";
+    public bool Ack { get; set; }
+}
+
 // =============================================================================
 // STATE SYNC PAYLOADS
 // =============================================================================

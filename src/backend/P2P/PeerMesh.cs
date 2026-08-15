@@ -38,6 +38,7 @@
 // =============================================================================
 
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.WebSockets;
 
 namespace Carcosa.Server.P2P;
@@ -53,9 +54,11 @@ public sealed class PeerMesh
     // =========================================================================
 
     private readonly PeerIdentity _localIdentity;
+    private readonly UdpMeshTransport? _udp;
     private readonly ConcurrentDictionary<string, PeerConnection> _peers = new();
     private readonly HashSet<string> _connectingAddresses = new(); // Prevent duplicate outbound attempts
     private readonly object _connectingLock = new();
+    private readonly HashSet<string> _inboundUdpKeys = new();
 
     // =========================================================================
     // PROPERTIES
@@ -98,9 +101,14 @@ public sealed class PeerMesh
     // CONSTRUCTOR
     // =========================================================================
 
-    public PeerMesh(PeerIdentity localIdentity)
+    public PeerMesh(PeerIdentity localIdentity) : this(localIdentity, null) { }
+
+    public PeerMesh(PeerIdentity localIdentity, UdpMeshTransport? udp)
     {
         _localIdentity = localIdentity;
+        _udp = udp;
+        if (_udp != null)
+            _udp.OnInboundPunch += HandleInboundUdpPunch;
     }
 
     // =========================================================================
@@ -127,7 +135,6 @@ public sealed class PeerMesh
             if (!handshakeResult)
             {
                 await connection.DisconnectAsync("handshake_failed");
-                connection.Dispose();
                 return;
             }
 
@@ -180,7 +187,25 @@ public sealed class PeerMesh
 
             var connection = new PeerConnection { IsOutbound = true };
 
-            // Establish WebSocket connection
+            if (_udp != null && await TryConnectUdpAsync(connection, address))
+            {
+                RegisterPeer(connection);
+                _ = Task.Run(async () =>
+                {
+                    try { await connection.ReceiveLoopAsync(); }
+                    finally
+                    {
+                        UnregisterPeer(connection);
+                        connection.Dispose();
+                    }
+                });
+                return true;
+            }
+
+            connection.Dispose();
+            connection = new PeerConnection { IsOutbound = true };
+
+            // Establish WebSocket connection (TCP fallback)
             using var cts = new CancellationTokenSource(PeerProtocol.HandshakeTimeoutMs);
             if (!await connection.ConnectOutboundAsync(address, cts.Token))
             {
@@ -231,6 +256,89 @@ public sealed class PeerMesh
                 _connectingAddresses.Remove(address);
             }
         }
+    }
+
+    private async Task<bool> TryConnectUdpAsync(PeerConnection connection, string address)
+    {
+        if (_udp == null || !UdpMeshTransport.TryParseEndpoint(address, out var remote) || remote == null)
+            return false;
+
+        Console.WriteLine($"[P2P:UDP] Punching {address}...");
+        using var punchCts = new CancellationTokenSource(3000);
+        if (!await _udp.PunchAsync(remote, _localIdentity, punchCts.Token))
+        {
+            Console.WriteLine($"[P2P:UDP] No punch ack from {address}, falling back to TCP");
+            return false;
+        }
+
+        connection.AttachUdp(_udp, remote);
+        var handshakeMsg = PeerHandshake.CreateHandshakeMessage(_localIdentity);
+        if (!await connection.SendAsync(handshakeMsg))
+        {
+            await connection.DisconnectAsync("udp_handshake_send_failed");
+            return false;
+        }
+
+        using var hsCts = new CancellationTokenSource(PeerProtocol.HandshakeTimeoutMs);
+        var accepted = await WaitForHandshakeResponseAsync(connection, hsCts.Token);
+        if (!accepted)
+        {
+            await connection.DisconnectAsync("udp_handshake_failed");
+            return false;
+        }
+
+        Console.WriteLine($"[P2P:UDP] Mesh path up to {address}");
+        return true;
+    }
+
+    private void HandleInboundUdpPunch(IPEndPoint from, PeerUdpPunchPayload punch)
+    {
+        if (_udp == null) return;
+        if (punch.PeerId == _localIdentity.PeerId) return;
+        if (IsPeerConnected(punch.PeerId)) return;
+
+        var key = from.ToString();
+        lock (_connectingLock)
+        {
+            if (_connectingAddresses.Contains(PeerAddress.Compose(from.Address.ToString(), from.Port)))
+                return;
+            if (!_inboundUdpKeys.Add(key))
+                return;
+        }
+
+        // Attach on the receive thread so the joiner's handshake is not dropped.
+        var connection = new PeerConnection { IsOutbound = false };
+        connection.AttachUdp(_udp, from);
+        Console.WriteLine($"[P2P:UDP] Inbound punch from {from} ({punch.DisplayName})");
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(PeerProtocol.HandshakeTimeoutMs);
+                var ok = await WaitForHandshakeAsync(connection, cts.Token);
+                if (!ok)
+                {
+                    await connection.DisconnectAsync("udp_handshake_failed");
+                    return;
+                }
+
+                RegisterPeer(connection);
+                await connection.ReceiveLoopAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[P2P:UDP] Inbound peer error: {ex.Message}");
+                await connection.DisconnectAsync("error");
+            }
+            finally
+            {
+                UnregisterPeer(connection);
+                connection.Dispose();
+                lock (_connectingLock)
+                    _inboundUdpKeys.Remove(key);
+            }
+        });
     }
 
     // =========================================================================

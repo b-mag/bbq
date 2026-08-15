@@ -101,6 +101,20 @@ export const NPC_DIALOGUE: Record<string, NpcDialogue> = {
       'Have you seen the play? No. Good. Do not.',
     ],
   },
+  npc_satyr: {
+    name: 'Mask-Goat',
+    lines: [
+      'The hooves remember a forest that is not this one.',
+      'Do not ask what the mask covers. It covers the asking.',
+    ],
+  },
+  npc_maskbearer: {
+    name: 'Horned Cantor',
+    lines: [
+      'We wore faces before we wore names.',
+      'If the pale oval turns toward you, bow. If it smiles, you imagined it.',
+    ],
+  },
 };
 
 export function dialogueFor(type: string): NpcDialogue | null {

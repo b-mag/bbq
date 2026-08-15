@@ -15,6 +15,7 @@ import { Camera, createCamera, cameraFollow, worldToScreen, screenToWorld, getVi
 import { OverworldGameMap, OwTileType, OW_TILE_COLORS, getOwTile, dashDestination } from '@/lib/overworld-map';
 import { OwPlayerState, OwDungeonEntranceData, OwWorldObjectData, OwLandmarkData } from '@/lib/overworld-messages';
 import { SpriteCache, initSprites, getSpriteCache, facingFromMotion, facingFromVelocity, playerSpriteName } from '@/lib/engine/sprites';
+import { drawAvatar, prefetchAvatar } from '@/lib/engine/avatar';
 import { walkDistance, isAttacking, attackElapsedMs, noteAttack, syncAttackFromCooldown } from '@/lib/engine/spriteAnim';
 import { TileAtlas, initTilesets } from '@/lib/engine/tilesets';
 import { OverworldTileCache } from '@/lib/engine/tileLayer';
@@ -64,6 +65,8 @@ export default function OverworldCanvas({
   const onDashRef = useRef(onMobilityDash);
   const onSpiritBeginRef = useRef(onSpiritBegin);
   localFigureRef.current = localFigure;
+  if (localFigure) prefetchAvatar(localFigure);
+  for (const p of players) prefetchAvatar(p.figure || 'b');
   secondaryRef.current = secondaryAbility;
   onDashRef.current = onMobilityDash;
   onSpiritBeginRef.current = onSpiritBegin;
@@ -621,15 +624,18 @@ function renderPlayer(
   ctx.ellipse(screen.x + 2, screen.y, radius * 0.55, radius * 0.22, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  const drawn = spriteCache?.drawSprite(
-    ctx, spriteName, screen.x, screen.y, tileSize, {
-      action: attacking ? 'attack' : (moving ? 'walk' : 'idle'),
-      facing,
-      distance: dist,
-      attackElapsedMs: attacking ? attackMs : undefined,
+  const pose = {
+    action: (attacking ? 'attack' : (moving ? 'walk' : 'idle')) as 'idle' | 'walk' | 'attack',
+    facing,
+    distance: dist,
+    attackElapsedMs: attacking ? attackMs : undefined,
+    heightScale: 1.55,
+  };
+  const drawn = drawAvatar(ctx, player.figure || 'b', screen.x, screen.y, tileSize, pose)
+    || (spriteCache?.drawSprite(ctx, spriteName, screen.x, screen.y, tileSize, {
+      ...pose,
       anchor: 'feet',
-    }
-  ) ?? false;
+    }) ?? false);
 
   if (!drawn) {
     ctx.fillStyle = isLocal ? '#c9a84c' : '#8b5fbf';

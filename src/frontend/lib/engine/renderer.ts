@@ -33,6 +33,7 @@ import { GameMap, TileType, TILE_COLORS, getTile } from '../map';
 import { EntityState } from '../messages';
 import { VisualEffect } from './effects';
 import { SpriteCache, facingFromMotion, playerSpriteName } from './sprites';
+import { drawAvatar } from './avatar';
 import { TileAtlas } from './tilesets';
 import { walkDistance, isAttacking, attackElapsedMs, syncAttackFromCooldown } from './spriteAnim';
 
@@ -215,13 +216,20 @@ function renderPlayer(
   ctx.fill();
 
   const tileSize = radius / 0.35;
-  const drawn = spriteCache?.drawSprite(ctx, spriteName, x, y, tileSize, {
+  const figure = isLocal ? (localFigure || 'b') : (entity.subType && entity.subType.length <= 2 ? entity.subType : 'b');
+  const drawn = drawAvatar(ctx, isLocal ? (localFigure || 'b') : figure, x, y, tileSize, {
+    action: attacking ? 'attack' : (moving ? 'walk' : 'idle'),
+    facing,
+    distance: dist,
+    attackElapsedMs: attacking ? attackMs : undefined,
+    heightScale: 1.55,
+  }) || (spriteCache?.drawSprite(ctx, spriteName, x, y, tileSize, {
     action: attacking ? 'attack' : (moving ? 'walk' : 'idle'),
     facing,
     distance: dist,
     attackElapsedMs: attacking ? attackMs : undefined,
     anchor: 'feet',
-  }) ?? false;
+  }) ?? false);
 
   if (!drawn) {
     ctx.fillStyle = color;

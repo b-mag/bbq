@@ -61,9 +61,22 @@ public sealed class PeerIdentity
     [JsonIgnore]
     public string Figure { get; set; } = "b";
 
-    /// <summary>Accepts only a/b/c; anything else (including empty) becomes b.</summary>
-    public static string NormalizeFigure(string? figure) =>
-        figure is "a" or "b" or "c" ? figure : "b";
+    /// <summary>
+    /// Cosmetic body id. a/b/c are the shipped figures; any [a-z0-9_] id is
+    /// kept so future shop avatars and peer bodies survive the wire.
+    /// </summary>
+    public static string NormalizeFigure(string? figure)
+    {
+        if (string.IsNullOrWhiteSpace(figure)) return "b";
+        var t = figure.Trim().ToLowerInvariant();
+        if (t.Length > 32) t = t[..32];
+        foreach (var ch in t)
+        {
+            if (ch is not (>= 'a' and <= 'z') and not (>= '0' and <= '9') and not '_')
+                return "b";
+        }
+        return t;
+    }
 
     /// <summary>
     /// The world shard this peer is currently part of.

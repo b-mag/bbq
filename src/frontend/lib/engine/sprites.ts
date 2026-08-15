@@ -47,14 +47,18 @@ export interface DrawSpriteOpts {
 }
 
 export const FIGURE_IDS = ['a', 'b', 'c'] as const;
-export type FigureId = (typeof FIGURE_IDS)[number];
+export type FigureId = string;
 
-export function normalizeFigure(figure?: string | null): FigureId {
-  return figure === 'a' || figure === 'b' || figure === 'c' ? figure : 'b';
+export function normalizeFigure(figure?: string | null): string {
+  if (!figure) return 'b';
+  const t = figure.trim().toLowerCase();
+  return /^[a-z0-9_]{1,32}$/.test(t) ? t : 'b';
 }
 
 export function playerSpriteName(figure?: string | null): string {
-  return `player_${normalizeFigure(figure)}`;
+  const id = normalizeFigure(figure);
+  if (id.startsWith('player_') || id.startsWith('villager_') || id.startsWith('satyr_')) return id;
+  return `player_${id}`;
 }
 
 /** Down=0, Left=1, Right=2, Up=3 */

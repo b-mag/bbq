@@ -513,6 +513,8 @@ internal static class OverworldWorldGen
         Add("npc_fisher", X(0.53) + 0.5f, Y(0.91) + 0.5f, false, 0);
         Add("npc_villager", X(0.50) + 0.5f, Y(0.83) + 0.5f, false, 0);
         Add("npc_villager", X(0.46) + 0.5f, Y(0.85) + 0.5f, false, 0);
+        Add("npc_satyr", X(0.54) + 0.5f, Y(0.84) + 0.5f, false, 0);
+        Add("npc_maskbearer", X(0.49) + 0.5f, Y(0.88) + 0.5f, false, 0);
         Add("npc_monk", X(0.82) + 0.5f, Y(0.25) + 0.5f, false, 0);
         Add("npc_monk", X(0.78) + 0.5f, Y(0.35) + 0.5f, false, 0);
 

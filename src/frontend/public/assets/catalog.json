@@ -82,6 +82,47 @@
       "attackRows": true,
       "usedBy": ["character select figure c"],
       "aliases": ["player_gangster"]
+    },
+    {
+      "id": "villager_ash",
+      "file": "sprites/villager_ash.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "attackRows": true,
+      "usedBy": ["npc_villager", "npc_widow"],
+      "notes": "Gaunt lakeshore humanoid. Packed from generated portrait."
+    },
+    {
+      "id": "villager_dock",
+      "file": "sprites/villager_dock.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "attackRows": true,
+      "usedBy": ["npc_fisher"]
+    },
+    {
+      "id": "satyr_mask",
+      "file": "sprites/satyr_mask.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "attackRows": true,
+      "usedBy": ["npc_satyr"]
+    },
+    {
+      "id": "satyr_horn",
+      "file": "sprites/satyr_horn.png",
+      "cell": [32, 32],
+      "frames": 4,
+      "directions": 4,
+      "facingOrder": ["down", "left", "right", "up"],
+      "attackRows": true,
+      "usedBy": ["npc_maskbearer", "npc_monk"]
     }
   ],
   "creatureSheets": [
@@ -129,7 +170,7 @@
       "frames": 4,
       "directions": 4,
       "facingOrder": ["down", "left", "right", "up"],
-      "usedBy": ["dungeon cultist", "npc_villager", "npc_widow", "npc_marsh", "cult_leader"]
+      "usedBy": ["dungeon cultist", "npc_marsh", "cult_leader"]
     },
     {
       "id": "cultist_shotgun",

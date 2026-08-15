@@ -202,6 +202,46 @@
     "color": "#c8c0b0",
     "collision": false
   },
+  "villager_ash": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "directions": 4,
+    "strideTiles": 0.9,
+    "attackFrames": 2,
+    "attackDurationMs": 280,
+    "color": "#6a6860"
+  },
+  "villager_dock": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "directions": 4,
+    "strideTiles": 0.9,
+    "attackFrames": 2,
+    "attackDurationMs": 280,
+    "color": "#4a5a48"
+  },
+  "satyr_mask": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "directions": 4,
+    "strideTiles": 0.85,
+    "attackFrames": 2,
+    "attackDurationMs": 280,
+    "color": "#c8c4b8"
+  },
+  "satyr_horn": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "directions": 4,
+    "strideTiles": 0.85,
+    "attackFrames": 2,
+    "attackDurationMs": 280,
+    "color": "#c9a84c"
+  },
   "npc_fisher": {
     "width": 32,
     "height": 32,
@@ -209,7 +249,7 @@
     "directions": 4,
     "strideTiles": 0.9,
     "color": "#6a5a3a",
-    "file": "cultist_torch.png"
+    "file": "villager_dock.png"
   },
   "npc_villager": {
     "width": 32,
@@ -218,7 +258,25 @@
     "directions": 4,
     "strideTiles": 0.9,
     "color": "#4a3a4a",
-    "file": "cultist_acolyte.png"
+    "file": "villager_ash.png"
+  },
+  "npc_satyr": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "directions": 4,
+    "strideTiles": 0.85,
+    "color": "#c8c4b8",
+    "file": "satyr_mask.png"
+  },
+  "npc_maskbearer": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "directions": 4,
+    "strideTiles": 0.85,
+    "color": "#c9a84c",
+    "file": "satyr_horn.png"
   },
   "npc_monk": {
     "width": 32,
@@ -227,7 +285,7 @@
     "directions": 4,
     "strideTiles": 0.95,
     "color": "#3a2a4a",
-    "file": "cultist_chanter.png"
+    "file": "satyr_horn.png"
   },
   "npc_cassilda": {
     "width": 32,
@@ -245,7 +303,7 @@
     "directions": 4,
     "strideTiles": 0.9,
     "color": "#6b3a28",
-    "file": "cultist_acolyte.png"
+    "file": "villager_ash.png"
   },
   "npc_ferryman": {
     "width": 32,

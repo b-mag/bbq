@@ -23,6 +23,7 @@
 
 using Carcosa.Server.Network;
 using Carcosa.Server.Cryptol;
+using Carcosa.Server.Gameplay;
 
 namespace Carcosa.Server.Game;
 
@@ -40,6 +41,8 @@ public sealed class SessionManager
     private readonly ConnectionManager _connectionManager;
     private readonly GameLoop _gameLoop;
     private readonly CryptolStore? _cryptolStore;
+    private readonly OverworldCombatSync? _overworldCombat;
+    private readonly QuestProgression? _quest;
     private readonly Dictionary<string, PlayerSession> _players = new();
     private readonly object _lock = new();
 
@@ -52,11 +55,18 @@ public sealed class SessionManager
     /// <summary>Player ID of the invader (if one has joined). Null if no invader.</summary>
     public string? InvaderId { get; private set; }
 
-    public SessionManager(ConnectionManager connectionManager, GameLoop gameLoop, CryptolStore? cryptolStore = null)
+    public SessionManager(
+        ConnectionManager connectionManager,
+        GameLoop gameLoop,
+        CryptolStore? cryptolStore = null,
+        OverworldCombatSync? overworldCombat = null,
+        QuestProgression? quest = null)
     {
         _connectionManager = connectionManager;
         _gameLoop = gameLoop;
         _cryptolStore = cryptolStore;
+        _overworldCombat = overworldCombat;
+        _quest = quest;
     }
 
     /// <summary>
@@ -223,11 +233,12 @@ public sealed class SessionManager
             {
                 var (spawnX, spawnY) = _gameLoop.State.Map.FindPlayerSpawn(Random.Shared);
                 _gameLoop.AddPlayer(
-                    player.PlayerId,
-                    player.PlayerName,
-                    player.SelectedClass ?? "detective",
-                    spawnX,
-                    spawnY);
+                player.PlayerId,
+                player.PlayerName,
+                player.SelectedClass ?? "detective",
+                spawnX,
+                spawnY);
+            ApplyOverworldLoadout(player.PlayerId);
             }
 
             BroadcastSessionInfo();
@@ -258,6 +269,7 @@ public sealed class SessionManager
                 player.SelectedClass ?? "detective",
                 spawnX,
                 spawnY);
+            ApplyOverworldLoadout(player.PlayerId);
         }
 
         _gameLoop.Waves.StartWaves(_gameLoop.State);
@@ -364,6 +376,18 @@ public sealed class SessionManager
             State = victory ? SessionState.Victory : SessionState.GameOver;
             _gameLoop.State.Phase = victory ? GamePhase.Victory : GamePhase.GameOver;
             Console.WriteLine($"[Session] Game ended: {(victory ? "VICTORY" : "DEFEAT")}");
+
+            if (victory)
+            {
+                var scenario = _gameLoop.State.Scenario switch
+                {
+                    MapScenario.PallidSanctum => "temple",
+                    MapScenario.Hollow => "hollow",
+                    MapScenario.MountainCave => "mountain_cave",
+                    _ => "drowned_dock",
+                };
+                _quest?.NotifyDungeonComplete(scenario, true);
+            }
 
             // Award Cryptol to all connected players
             // Warehouse Victory (boss defeated, at least 1 survivor): 1000 Cryptol each
@@ -530,6 +554,14 @@ public sealed class SessionManager
             SessionInfo = info
         };
         _ = _connectionManager.BroadcastAsync(message);
+    }
+
+    private void ApplyOverworldLoadout(string playerId)
+    {
+        if (_overworldCombat == null) return;
+        var entity = _gameLoop.State.GetPlayerByOwnerId(playerId);
+        if (entity == null) return;
+        _overworldCombat.CopyLoadoutToDungeonPlayer(entity);
     }
 }
 

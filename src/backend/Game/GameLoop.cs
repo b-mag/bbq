@@ -37,6 +37,7 @@
 
 using System.Diagnostics;
 using Carcosa.Server.Network;
+using Carcosa.Server.Gameplay;
 
 namespace Carcosa.Server.Game;
 
@@ -333,11 +334,17 @@ public sealed class GameLoop : IDisposable
             // Process combat actions (fire, ability, interact)
             if (input.PrimaryFire)
             {
-                CombatSystem.ProcessPrimaryFire(_state, entity, input.AimAngle);
+                if (!string.IsNullOrEmpty(entity.PrimaryAbility))
+                    CombatSystem.ProcessAbility(_state, entity, entity.PrimaryAbility, input.AimAngle);
+                else
+                    CombatSystem.ProcessPrimaryFire(_state, entity, input.AimAngle);
             }
             if (input.SecondaryAbility)
             {
-                CombatSystem.ProcessSecondaryAbility(_state, entity);
+                if (!string.IsNullOrEmpty(entity.SecondaryAbility))
+                    CombatSystem.ProcessAbility(_state, entity, entity.SecondaryAbility, input.AimAngle);
+                else
+                    CombatSystem.ProcessSecondaryAbility(_state, entity);
             }
             if (input.Interact)
             {
@@ -609,6 +616,11 @@ public sealed class GameLoop : IDisposable
                 entity.PrimaryFireCooldown--;
             if (entity.SecondaryAbilityCooldown > 0)
                 entity.SecondaryAbilityCooldown--;
+            if (entity.Type == EntityType.Player && entity.IsAlive)
+            {
+                StaminaSystem.ProcessStaminaTick(entity);
+                StaminaSystem.ProcessIFrameTick(entity);
+            }
         }
     }
 

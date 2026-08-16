@@ -195,6 +195,15 @@
     "collision": true,
     "collisionRadius": 3.2
   },
+  "old_book_husk": {
+    "width": 16,
+    "height": 20,
+    "frames": 1,
+    "color": "#6B3A28",
+    "collision": true,
+    "collisionRadius": 0.25,
+    "file": "old_book_husk.png"
+  },
   "npc_merek": {
     "width": 32,
     "height": 32,

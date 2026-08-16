@@ -141,7 +141,8 @@ export default function Home() {
 
             // Return to overworld on game over/victory
             if (message.gameEvent.event === 'game_over' || message.gameEvent.event === 'victory') {
-              setTimeout(() => handleReturnToOverworld(), 5000);
+              const won = message.gameEvent.event === 'victory';
+              setTimeout(() => handleReturnToOverworld(won), 5000);
             }
           }
           break;
@@ -181,15 +182,23 @@ export default function Home() {
     }
   }, [entities, ws.playerId, appState, isSpectating]);
 
-  // Handle dungeon disconnect — return to overworld if connection drops
+  // Only leave after a live dungeon socket actually drops — not the
+  // disconnected window before the first connect (REST map is already set).
+  const dungeonWasConnected = useRef(false);
   useEffect(() => {
-    if (appState !== 'dungeon') return;
-    if (ws.status === 'disconnected' && gameMap) {
-      // Connection dropped after we had loaded the map — return to overworld
-      console.log('[Dungeon] Connection lost, returning to overworld');
-      setTimeout(() => handleReturnToOverworld(), 1000);
+    if (appState !== 'dungeon') {
+      dungeonWasConnected.current = false;
+      return;
     }
-  }, [appState, ws.status, gameMap]);
+    if (ws.status === 'connected') {
+      dungeonWasConnected.current = true;
+      return;
+    }
+    if (!dungeonWasConnected.current) return;
+    if (ws.status !== 'disconnected' && ws.status !== 'error') return;
+    const t = window.setTimeout(() => handleReturnToOverworld(false), 1500);
+    return () => window.clearTimeout(t);
+  }, [appState, ws.status]);
 
   // First-run name gate: skip connect screen if the save already has a name
   useEffect(() => {
@@ -263,11 +272,11 @@ export default function Home() {
   }, [appState, ws.status, ws.send]);
 
   // Return to overworld from dungeon
-  const handleReturnToOverworld = () => {
+  const handleReturnToOverworld = (victory = false) => {
     fetch('/api/gameplay/dungeon/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ victory: false }),
+      body: JSON.stringify({ victory }),
     }).catch(() => { /* ignore */ });
     ws.disconnect();
     setAppState('overworld');
@@ -344,7 +353,7 @@ export default function Home() {
         onChatSend={handleSendChat}
         onChatFocus={() => setChatFocused(true)}
         onChatBlur={() => setChatFocused(false)}
-        onDisconnect={handleReturnToOverworld}
+        onDisconnect={() => handleReturnToOverworld(false)}
         isSpectating={isSpectating}
         spectateTargetName={
           spectateTargetId ? entities.find(e => e.id === spectateTargetId)?.subType || 'Teammate' : undefined
@@ -378,7 +387,7 @@ export default function Home() {
         <p style={{ color: '#6a5d4a', marginTop: 8 }}>
           {ws.status === 'connecting' ? 'Connecting to dungeon host...' : 'Loading dungeon...'}
         </p>
-        <button onClick={handleReturnToOverworld} style={{
+        <button onClick={() => handleReturnToOverworld(false)} style={{
           marginTop: 20, padding: '8px 16px', background: '#4a2a2a', border: '1px solid #6a3030',
           borderRadius: 4, color: '#a85050', cursor: 'pointer',
         }}>

@@ -251,6 +251,17 @@
       "tiles": [[320, 447], [320, 294], [409, 294]]
     },
     {
+      "id": "old_book_husk",
+      "file": "sprites/old_book_husk.png",
+      "size": [16, 20],
+      "facing": "south",
+      "anchor": "feet",
+      "collisionRadius": 0.25,
+      "placement": "Wet sand beside Merek / the Dream Hull (~0.545, 0.955 on the 640 map)",
+      "notes": "Quest pickup. E to collect. Disappears after POST /api/gameplay/world-pickup. Placeholder PNG until art pass.",
+      "palette": "gold"
+    },
+    {
       "id": "house",
       "file": "sprites/house.png",
       "size": [64, 64],

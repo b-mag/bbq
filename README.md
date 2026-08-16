@@ -1,7 +1,9 @@
 # CARCOSA — Technical Architecture Documentation
 
-**Version:** 1.0  
-**Last Updated:** August 2026  
+**Version:** 1.1  
+**Last Updated:** August 16, 2026  
+
+Also see [DEPENDENCY_TREE.md](DEPENDENCY_TREE.md) (C# project / class graph) and [SPRITE_TECHNICAL.md](SPRITE_TECHNICAL.md) (sprite sizes, palettes, asset pipeline).
 
 ---
 
@@ -19,29 +21,35 @@
 2. [Technology Stack](#2-technology-stack)
 3. [Project Structure](#3-project-structure)
 4. [Architecture Overview](#4-architecture-overview)
-5. [How .NET Serves the React Frontend](#5-how-net-serves-the-react-frontend)
-6. [The P2P Mesh Network](#6-the-p2p-mesh-network)
-7. [Peer Discovery & Glyph Codes](#7-peer-discovery--glyph-codes)
-8. [The Matchmaking Service](#8-the-matchmaking-service)
-9. [Kafka Integration](#9-kafka-integration)
-10. [WebSocket Communication](#10-websocket-communication)
-11. [The Game Loop & Combat System](#11-the-game-loop--combat-system)
-12. [Frontend Architecture (React/Next.js)](#12-frontend-architecture-reactnextjs)
-13. [Native AOT & JSON Serialization](#13-native-aot--json-serialization)
-14. [Build, Deploy & Run](#14-build-deploy--run)
+5. [Current Gameplay Systems](#5-current-gameplay-systems)
+6. [How .NET Serves the React Frontend](#6-how-net-serves-the-react-frontend)
+7. [The P2P Mesh Network](#7-the-p2p-mesh-network)
+8. [Peer Discovery & Glyph Codes](#8-peer-discovery--glyph-codes)
+9. [The Matchmaking Service](#9-the-matchmaking-service)
+10. [Kafka Integration](#10-kafka-integration)
+11. [WebSocket Communication](#11-websocket-communication)
+12. [The Game Loop & Combat System](#12-the-game-loop--combat-system)
+13. [Frontend Architecture (React/Next.js)](#13-frontend-architecture-reactnextjs)
+14. [Native AOT & JSON Serialization](#14-native-aot--json-serialization)
+15. [Build, Deploy & Run](#15-build-deploy--run)
+16. [Next Steps / TODOs](#16-next-steps--todos)
 
 ---
 
 ## 1. Executive Summary
 
-Carcosa is a **peer-to-peer (P2P) top-down action RPG** with a shared overworld and instanced dungeons. The game is designed to work **entirely without a central server** — players connect directly to each other via WebSocket mesh networking. An optional matchmaking service aids discovery but is not required for gameplay.
+Carcosa is a **peer-to-peer (P2P) top-down action RPG** (A Link to the Past exploration + Lovecraft / King in Yellow atmosphere). Players get a complete **single-player path**. Other peers may join organically as a mesh forms. There is **no required central game server**; the world stays playable via a mesh of `Carcosa.Server.exe` processes.
 
-**Key Architectural Decisions:**
-- **P2P mesh networking** — Each player runs a game server instance that connects to others
-- **.NET 10 Native AOT** — Single compiled binary, no .NET runtime installation required
-- **Next.js static export** — Frontend compiled to static HTML/JS/CSS, embedded in the .NET binary's wwwroot
-- **Single-exe distribution** — One file contains game server + frontend + all assets
-- **Apache Kafka** — Optional event streaming for session discovery (gracefully degrades without it)
+**Elevator pitch:** Discover the secrets of Carcosa, retrieve ancient artifacts and wisdom that may point to a route home… or to your doom. Play with friends or entirely offline. No centralized server means the game can remain playable for all time.
+
+**Key architectural decisions (as the code exists now, not the original sketch):**
+- **Each player runs a Native AOT game server** that serves a Next.js static frontend from `wwwroot` and talks to peers over `/ws/peer` (JSON WebSocket) plus a **UDP mesh socket** used for STUN, hole-punch hellos, and fallback mesh JSON.
+- **Overworld is generated in-process** (`OverworldWorldGen` / `OverworldBootstrap`, 640×640 tiles). It is not loaded from matchmaking. Combat, inventory, quest, and digging are **localhost REST** polled by React.
+- **Dungeons are still a split path.** Mesh `DungeonInstanceManager` allocates an instance, then the frontend opens `/ws` into the legacy `GameLoop` wave-shooter. Loadout is copied from the overworld. This is why dungeon feel lags the overworld (see §16).
+- **Quest, Key Items, Friends, and dig loot are local authority.** They persist in encrypted `player-save.dat` (save format v3) and are **never meshed**. Multiplayer is additive.
+- **Friends ≠ Party.** Party is combat/loot grouping. Friends is a persisted peer-id list for a **future mesh-split** that does not exist yet: if a cluster must split, Friends should stay together.
+- **Matchmaking + Kafka are optional discovery only.** The game server has **no Kafka client**. Heartbeats go REST to matchmaking; Kafka lives inside the matchmaking service. Offline mode skips tracker entirely.
+- **TURN is missing.** STUN + UPnP (`UpnpPortMapper`) + Glyph + PEX exist. Symmetric NAT / CGNAT pairs still fail (see `NAT_TURN_GAP.md`).
 
 ---
 
@@ -68,12 +76,12 @@ Carcosa is a **peer-to-peer (P2P) top-down action RPG** with a shared overworld 
 bbq/
 ├── src/
 │   ├── backend/              # .NET Game Server (the main application)
-│   │   ├── Game/             # Game loop, entities, combat, map generation
-│   │   ├── Gameplay/         # Phase B: stamina, abilities, loot, inventory, save
-│   │   ├── Network/          # WebSocket connection management, messages
-│   │   ├── P2P/              # Peer mesh networking, sync, handshake, Glyph codes
+│   │   ├── Game/             # Dungeon GameLoop, entities, combat, map generation
+│   │   ├── Gameplay/         # Overworld, inventory, quest, dig, save, dungeons
+│   │   ├── Network/          # WebSocket /ws (dungeon) + matchmaking REST client
+│   │   ├── P2P/              # Mesh, Glyph, STUN/UDP, UPnP, handshake, shards
 │   │   ├── Cryptol/          # Currency persistence (Pale Marks)
-│   │   ├── Program.cs        # Entry point, DI registration, all REST endpoints
+│   │   ├── Program.cs        # Entry point, DI, all REST endpoints (AOT JSON)
 │   │   ├── wwwroot/          # Built frontend (generated, not committed)
 │   │   └── Carcosa.Server.csproj
 │   ├── frontend/             # Next.js React SPA
@@ -151,16 +159,91 @@ bbq/
                   └─────────────┘
 ```
 
-**Communication Patterns:**
-1. **Frontend → Backend:** REST polling over localhost (10-16Hz)
-2. **Peer → Peer:** WebSocket full-mesh (20Hz state broadcasts)
-3. **Game Server → Matchmaking:** REST heartbeats (every 10s)
-4. **Game Server → Kafka:** Session heartbeat publication (every 10s)
-5. **Matchmaking → Kafka:** Consumer reads heartbeats into session registry
+**Communication Patterns (current):**
+1. **Frontend → local backend:** REST polling over localhost (10–20Hz). Overworld combat, inventory, quest, friends, dig, fog, settings.
+2. **Frontend → local backend (dungeon only):** WebSocket `/ws` into `GameLoop` (20Hz input / state).
+3. **Peer → Peer:** WebSocket `/ws/peer` full mesh (20Hz state). UDP on the same listen port for STUN, hole-punch, optional mesh JSON.
+4. **Game Server → Matchmaking (optional):** REST heartbeats every 10s via `MatchmakingClient`. **No Kafka in the game server.**
+5. **Matchmaking → Kafka (optional):** Matchmaking service consumes session heartbeats into its registry.
 
 ---
 
-## 5. How .NET Serves the React Frontend
+## 5. Current Gameplay Systems
+
+This is the evolved runtime, not the original design sketch.
+
+### Dual play surfaces
+
+| Surface | Authority | Transport | Feel |
+|---------|-----------|-----------|------|
+| **Overworld** | Local `OverworldCombatSync` + shard host for enemies | REST (`/api/gameplay/*`, `/api/p2p/*`) | LTTP-style exploration, RMB abilities, inventory, NPCs, fog-of-war |
+| **Dungeon** | Local `GameLoop` + `SessionManager` | WebSocket `/ws` after `POST /api/gameplay/dungeon/enter` | Still a wave-shooter map from `MapGenerator`. Loadout is copied from overworld. |
+
+The overworld map is **in-EXE** (`OverworldWorldGen`, 640×640). Matchmaking's `Overworld/` folder is a **legacy dashboard path**, not the live world.
+
+**Shard host:** lowest peer id runs overworld enemy AI (`ShardHost`). Each peer is authoritative for **their own** player position.
+
+**Fog of war** is packed into the save file and is **not** P2P. Other players do not share exploration.
+
+### Save file (v3)
+
+`SaveManager` writes encrypted `player-save.dat` (AES-256-CBC + HMAC, PBKDF2 from peer id). Auto-save ~60s and on shutdown.
+
+v3 added (local only, never meshed):
+- `KeyItemIds`, `Friends` (`SavedFriend`: peer id + display name)
+- Necronomicon quest stage, functions, rank
+- `DefeatedDungeonIds`, `CollectedWorldObjectIds`, `DugSpotIds`
+- See Beyond marker (area id, x/y, label, active)
+
+**AOT rule:** every new HTTP DTO must be listed on `AppJsonContext` in `Program.cs`. Save types go on `PlayerSaveJsonContext`. P2P types go on `PeerJsonContext`. Forgetting this fails silently in Release/AOT.
+
+### Key Items & Necronomicon quest (implemented)
+
+Key Items are **not backpack**. Screen: **K**, or Pause is for Friends. Inventory footer points at K.
+
+Early chain (local `QuestProgression`):
+
+1. Wash ashore near **Merek** and the Dream Hull (`dream_ship`).
+2. Pick up **Old Book Husk** (`old_book_husk`, wet sand ~0.545, 0.955) with **E** → `POST /api/gameplay/world-pickup`.
+3. Talk to Merek (`POST /api/gameplay/npc-talk`) — he binds the husk into a blank **Necronomicon** (0 functions) and sends the player to the **Drowned Docks**.
+4. Defeat the docks boss (`boss_warehouse` in the wave loop). Victory must be reported (`dungeon/complete` with `victory: true` and `SessionManager.EndGame(true)`). Pages bind; Necronomicon gains **See Beyond**.
+5. Use Necronomicon from Key Items (`POST /api/gameplay/key-items/use`). A **pulsing map marker** is planted for the suggested next area. It **ignores fog-of-war**. Pulse stops when that area's boss is defeated. The player may ignore it.
+6. Later bosses raise `NecronomiconRank` and re-using See Beyond plants a new marker.
+
+Suggested chain (coordinates match dungeon entrances; content gaps noted in §16): drowned_dock → Temple of Hali → Mountain Cave → Sunken Cyclopean Quay → Palace Crypt.
+
+Quest APIs: `GET /api/gameplay/quest`, `POST /api/gameplay/npc-talk`, `POST /api/gameplay/world-pickup`, `POST /api/gameplay/key-items/use`.
+
+### Friends (implemented; mesh-split not implemented)
+
+Pause menu → **Friends**, or the friends panel lists connected `/ws/peer` peers. Toggle persists to the save file (`GET/POST /api/gameplay/friends`).
+
+**Rationale:** if a mesh cluster ever needs to split (bounded neighborhood / overflow), **prefer keeping Friends in the same neighborhood**. Do not use Friends for combat authority or loot rights (party already covers that). The split algorithm is future work.
+
+### Digging (framework implemented; shovel not granted yet)
+
+A Link to the Past style. **G** on sand / path / desert / ash / dark grass / grass. Requires Key Item `obsidian_shovel` (not awarded by the early quest — later dungeon / Temple of Hali is the intended grant).
+
+`POST /api/gameplay/dig` → `DigSystem.TryDig`. Most tiles yield nothing or minor junk (`dark_feathers`, `raw_gronk_meat`). Twelve named artifacts sit on deterministic world coordinates (three are secrets at map corners). Majority are **passive** Key Items; passives are **catalogued, not yet wired to combat/AI**.
+
+Dig loot is **private**. No P2P broadcast.
+
+### Dungeon right-click (fixed)
+
+Dungeon secondary used to open the **browser context menu** because `/ws` input only treated **E** as secondary and the canvas did not `preventDefault` on `contextmenu`. Now:
+
+- `lib/engine/input.ts`: RMB + `contextmenu` prevent; `secondaryAbility = rightMouseDown || E`
+- `GameCanvas.tsx` and `GameHUD.tsx` also block the context menu
+
+Overworld already did this on `OverworldCanvas`.
+
+### What is deliberately not synced
+
+Quest flags, Key Items, Friends, dig spots, fog-of-war, settings, inventory, Pale Marks. Two players in the same shard can be on different quest steps. That is MMORPG-lite by design.
+
+---
+
+## 6. How .NET Serves the React Frontend
 
 ### The Build Pipeline
 
@@ -236,11 +319,11 @@ setInterval(fetchStats, 100);
 
 ---
 
-## 6. The P2P Mesh Network
+## 7. The P2P Mesh Network
 
 ### Concept
 
-Every player runs their own instance of `Carcosa.Server.exe`. These instances connect to each other via WebSocket forming a **full mesh** — every peer is connected to every other peer. There is NO central game server.
+Every player runs their own instance of `Carcosa.Server.exe`. These instances connect to each other via WebSocket (`/ws/peer`) forming a **full mesh**. There is NO central game server. A **UDP socket on the same listen port** (`UdpMeshTransport`) runs STUN and hole-punch hellos so Glyphs can advertise a mapped UDP port; TCP `PublicAddress` remains the WebSocket fallback. **TURN is not implemented.**
 
 ### Peer Identity
 
@@ -353,7 +436,7 @@ private async Task BroadcastLoop(CancellationToken ct)
 
 ---
 
-## 7. Peer Discovery & Glyph Codes
+## 8. Peer Discovery & Glyph Codes
 
 ### Three Ways Peers Find Each Other
 
@@ -419,7 +502,7 @@ When a peer receives PEX data, it connects to any unknown peers. This ensures th
 
 ---
 
-## 8. The Matchmaking Service
+## 9. The Matchmaking Service
 
 ### Overview
 
@@ -471,11 +554,13 @@ If the matchmaking service is unavailable:
 
 ---
 
-## 9. Kafka Integration
+## 10. Kafka Integration
 
 ### Purpose
 
-Kafka serves as a **durable event bus** for session discovery. Game servers publish heartbeats; the matchmaking service consumes them.
+Kafka is an **optional durable event bus for the matchmaking service only**. The game server (`Carcosa.Server`) has **no Kafka package and no producer**. Players discover sessions via REST heartbeats to matchmaking (`MatchmakingClient`). Matchmaking may then persist those heartbeats on Kafka topic `sessions.active`.
+
+If Kafka is down, matchmaking can still keep an in-memory registry (graceful degrade). If matchmaking is down, Glyph + PEX + `known-peers.json` still form a mesh.
 
 ### Topic: `sessions.active`
 
@@ -485,25 +570,9 @@ Kafka serves as a **durable event bus** for session discovery. Game servers publ
 | Value | JSON `SessionHeartbeat` |
 | Retention | 30 seconds (ephemeral — sessions are live data) |
 
-### Producer (Game Server → Kafka)
+### Producer (removed from game server)
 
-```csharp
-// KafkaService.cs — publish a session heartbeat
-public async Task PublishHeartbeat(SessionHeartbeat heartbeat)
-{
-    using var producer = new ProducerBuilder<string, string>(_producerConfig).Build();
-    var json = JsonSerializer.Serialize(heartbeat, KafkaJsonContext.Default.SessionHeartbeat);
-    await producer.ProduceAsync("sessions.active", new Message<string, string>
-    {
-        Key = heartbeat.SessionId,
-        Value = json
-    });
-}
-```
-
-**Producer Config:**
-- `Acks = Leader` (fast acknowledgment, session data is ephemeral)
-- Bootstrap servers from CLI arg or Docker env var
+Older docs showed `Carcosa.Server` publishing Kafka heartbeats. That path is gone. Heartbeats are HTTP from `MatchmakingClient` to matchmaking; **only** `src/matchmaking/Services/KafkaService.cs` talks to Kafka.
 
 ### Consumer (Matchmaking reads heartbeats)
 
@@ -560,7 +629,7 @@ If Kafka is unavailable:
 
 ---
 
-## 10. WebSocket Communication
+## 11. WebSocket Communication
 
 ### Two WebSocket Endpoints
 
@@ -629,7 +698,9 @@ public sealed class PeerMessage
 
 ---
 
-## 11. The Game Loop & Combat System
+## 12. The Game Loop & Combat System
+
+`GameLoop` is the **dungeon / wave-shooter** tick loop (WebSocket `/ws`). Overworld combat is a separate 20Hz loop in `OverworldCombatSync` driven by REST. When a dungeon starts, `SessionManager` copies the overworld loadout onto dungeon player entities so primary/secondary abilities match. Dungeon ticks now call `CombatSystem.ProcessAbility` plus stamina / i-frame processing — closer to overworld, but the map and encounter model are still `MapGenerator` + `WaveSystem`, not the overworld tile rules.
 
 ### Tick-Based Architecture
 
@@ -725,22 +796,30 @@ public static string? DetermineHost(IEnumerable<string> allPeerIds)
 
 ---
 
-## 12. Frontend Architecture (React/Next.js)
+## 13. Frontend Architecture (React/Next.js)
 
 ### Component Hierarchy
 
 ```
 OverworldView (orchestrator)
-├── OverworldCanvas (2D canvas renderer — 60fps)
-├── HealthBar (HP display)
-├── StaminaBar (stamina display)
-├── AbilityBar (equipped ability icons)
-├── SaveIndicator (auto-save spinner)
-├── OverworldChat (chat panel)
+├── OverworldCanvas (2D canvas — 60fps; RMB abilities, contextmenu blocked)
+├── HealthBar / StaminaBar / AbilityBar / XpBar
+├── SaveIndicator
+├── OverworldChat
 ├── P2POverlay (mesh status, Glyph, admin messages)
-├── QuitMenu (ESC → quit confirmation)
-├── InventoryPanel (I key → equipment + backpack)
-└── AbilitySelectPanel (altar interaction → ability swap)
+├── PauseMenu (ESC → Resume / Settings / Friends / Quit)
+├── SettingsPanel
+├── FriendsPanel (connected peers → persist Friends to save)
+├── InventoryPanel (I — equipment + backpack; K opens Key Items)
+├── KeyItemsPanel (Necronomicon, shovel, dug artifacts)
+├── OverworldMapPanel (fog + See Beyond pulse through fog)
+├── DialoguePanel (Merek quest via /api/gameplay/npc-talk)
+├── FlameOfferingPanel / CryptolShopPanel
+└── AbilitySelectPanel
+
+Dungeon path (page.tsx)
+├── GameHUD
+│   └── GameCanvas (/ws input; RMB = secondary; contextmenu blocked)
 ```
 
 ### Polling Hooks (how frontend gets data)
@@ -809,7 +888,7 @@ const render = useCallback(() => {
 
 ---
 
-## 13. Native AOT & JSON Serialization
+## 14. Native AOT & JSON Serialization
 
 ### Why Native AOT
 
@@ -841,7 +920,7 @@ public partial class PeerJsonContext : JsonSerializerContext { }
 
 ---
 
-## 14. Build, Deploy & Run
+## 15. Build, Deploy & Run
 
 ### Prerequisites
 
@@ -912,12 +991,62 @@ Then you can just double click the script: launch_full_test.bat and it will laun
 ```powershell
 dotnet publish -c Release -r win-x64
 # Produces: bin/Release/net10.0/win-x64/publish/
-#   Carcosa.Server.exe   (single native binary, ~20-30MB)
+#   Carcosa.exe          (single native binary, ~20-30MB)
 #   wwwroot/             (frontend static files)
 #   appsettings.json     (configuration)
 ```
 
 Players receive: the exe + wwwroot folder. Double-click to play. No installation required.
+
+---
+
+## 16. Next Steps / TODOs
+
+Ordered roughly by player-facing impact. Solo must remain complete; multiplayer stays optional.
+
+### P0 — Dungeon / overworld parity
+
+- [ ] Dungeon movement, collision, and camera should feel like the overworld (currently `MapGenerator` + wave spawns). Exit portal / return-to-overworld still has leftover friction (`implementations/VERTICAL_SLICE_BACKLOG.md`).
+- [x] Dungeon right-click no longer opens a browser context menu; RMB fires secondary (same as overworld).
+- [ ] Palace Crypt and Temple of Hali currently share the `temple` scenario. See Beyond treats them carefully; they need distinct maps.
+- [ ] `DungeonInstanceManager.ParseScenario` maps `"warehouse"` → Drowned Dock. `QuestProgression.NormalizeDungeonId` also folds `warehouse` into `drowned_dock`, so the “Sunken Cyclopean Quay” See Beyond stop never appears as a separate clear. Split those ids.
+- [ ] Copy remaining overworld systems into dungeon: pickup prompts, Key Items (K), map, Friends.
+
+### P1 — Content & progression
+
+- [x] Key Items screen (K) for permanent items.
+- [x] Merek / Old Book Husk / Necronomicon / See Beyond early chain.
+- [ ] Award **Obsidian Shovel** from a later dungeon (suggested: Temple of Hali boss). Digging exists but returns “no shovel” until then.
+- [ ] Wire dig artifact **passives** to combat/AI/stamina (they currently grant Key Items + flavor only). See artifact table in [SPRITE_TECHNICAL.md](SPRITE_TECHNICAL.md) / `DigSystem.Artifacts`.
+- [ ] Additional Necronomicon functions after See Beyond (each boss should add a named page/ability, not only rank).
+- [ ] Clue items / map fragments that mark productive dig spots on the map (most digs are empty by design).
+- [ ] Replace placeholder `old_book_husk.png` (16×20) with final art.
+
+### P1 — Mesh future (do not break solo)
+
+- [x] Friends selection + save persistence (`SavedFriend` in v3 save).
+- [ ] **Mesh-split / bounded neighborhood:** when a cluster is too large, split shards but **prefer keeping Friends together**. Algorithm does not exist yet; consume `QuestProgression.Friends` / save `Friends`. Do not use Friends for loot rights.
+- [ ] TURN relay for symmetric NAT / CGNAT (`NAT_TURN_GAP.md`). UPnP already attempts a quiet map of the TCP listen port.
+- [ ] IPv6 Glyphs (`GlyphCodec` is IPv4).
+- [ ] Unify dungeon instances onto the mesh (`DungeonInstanceManager`) instead of dropping into local `/ws` GameLoop.
+
+### P2 — Atmosphere & systems still missing
+
+- [ ] Interior buildings as real maps (some houses are enterable stubs).
+- [ ] Day/night or Second-Sun Lens active effect (secret dig artifact).
+- [ ] Nameless City Key door (secret dig artifact has no function).
+- [ ] Named palettes for reference art exist in `palettes.json` / `palettes.ts`; drop reference PNGs under `assets/references/` and re-run `dev_scripts/extract-palettes.py` to sample true colors.
+- [ ] Audio / music pass (settings have volume; little content).
+- [ ] Anti-cheat is post-hoc trust of peer position (documented); no verification yet.
+
+### Architecture decisions to preserve
+
+1. **No central game server.** Matchmaking is discovery only.
+2. **Quest / Key Items / Friends / dig / fog stay local.** Never broadcast on `/ws/peer`.
+3. **AOT JSON:** register every new DTO.
+4. **Friends list is split-input, not party.** Party = combat/loot. Friends = future neighborhood preference.
+
+Related: [DEPENDENCY_TREE.md](DEPENDENCY_TREE.md), [SPRITE_TECHNICAL.md](SPRITE_TECHNICAL.md), [NAT_TURN_GAP.md](NAT_TURN_GAP.md), [implementations/VERTICAL_SLICE_BACKLOG.md](implementations/VERTICAL_SLICE_BACKLOG.md).
 
 ---
 

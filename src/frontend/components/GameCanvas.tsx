@@ -137,8 +137,11 @@ export default function GameCanvas({
 
     // Use passive: false so we can call preventDefault() to stop page scroll
     canvas.addEventListener('wheel', handleWheel, { passive: false });
+    const blockMenu = (e: Event) => e.preventDefault();
+    canvas.addEventListener('contextmenu', blockMenu);
     return () => {
       canvas.removeEventListener('wheel', handleWheel);
+      canvas.removeEventListener('contextmenu', blockMenu);
     };
   }, []);
 

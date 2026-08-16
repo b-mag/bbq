@@ -15,10 +15,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { OverworldMessage, OwMessageTypes, OwPlayerInputPayload, OwWorldObjectData } from '@/lib/overworld-messages';
 import { OverworldGameMap, OwTileType, isOwWalkableF, getOwTile } from '@/lib/overworld-map';
 
-const TICK_RATE = 20;
-const TICK_INTERVAL = 1000 / TICK_RATE;
+const SEND_HZ = 20;
+const SEND_INTERVAL_MS = 1000 / SEND_HZ;
 const PLAYER_SPEED = 4.5; // tiles/second
-const MOVE_PER_TICK = PLAYER_SPEED / TICK_RATE;
 const PLAYER_RADIUS = 0.3;
 
 interface UseOverworldInputOptions {
@@ -35,9 +34,17 @@ export function useOverworldInput(options: UseOverworldInputOptions) {
   const velRef = useRef({ x: 0, y: 0 });
   const keysRef = useRef<Set<string>>(new Set());
   const sequenceRef = useRef(0);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const rafRef = useRef<number>(0);
+  const lastFrameRef = useRef(0);
+  const sendAccRef = useRef(0);
   const interactRef = useRef(false);
   const lockedRef = useRef(false);
+  const mapRef = useRef(map);
+  const objectsRef = useRef(worldObjects);
+  const sendRef = useRef(send);
+  mapRef.current = map;
+  objectsRef.current = worldObjects;
+  sendRef.current = send;
 
   // Track pending inputs for reconciliation
   const pendingInputsRef = useRef<Array<{ seq: number; dx: number; dy: number }>>([]);
@@ -95,94 +102,98 @@ export function useOverworldInput(options: UseOverworldInputOptions) {
     };
   }, [active]);
 
-  // 20Hz input loop
+  // Display movement on the paint loop; mesh still gets 20Hz samples.
   useEffect(() => {
     if (!active) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+      lastFrameRef.current = 0;
       return;
     }
 
-    intervalRef.current = setInterval(() => {
+    const frame = (now: number) => {
+      const prev = lastFrameRef.current || now;
+      lastFrameRef.current = now;
+      const dt = Math.min(0.05, (now - prev) / 1000);
+
       if (lockedRef.current) {
-        velRef.current = { x: 0, y: 0 };
+        if (velRef.current.x !== 0 || velRef.current.y !== 0) {
+          velRef.current = { x: 0, y: 0 };
+          setPosition({ x: posRef.current.x, y: posRef.current.y });
+        }
+        rafRef.current = requestAnimationFrame(frame);
         return;
       }
+
       const keys = keysRef.current;
       let moveX = 0;
       let moveY = 0;
-
       if (keys.has('w') || keys.has('arrowup')) moveY = -1;
       if (keys.has('s') || keys.has('arrowdown')) moveY = 1;
       if (keys.has('a') || keys.has('arrowleft')) moveX = -1;
       if (keys.has('d') || keys.has('arrowright')) moveX = 1;
 
-      if (map && getOwTile(map, Math.floor(posRef.current.x), Math.floor(posRef.current.y)) === OwTileType.Ladder) {
+      const liveMap = mapRef.current;
+      if (liveMap && getOwTile(liveMap, Math.floor(posRef.current.x), Math.floor(posRef.current.y)) === OwTileType.Ladder) {
         moveX = 0;
       }
 
-      // Normalize diagonal
       if (moveX !== 0 && moveY !== 0) {
         const len = Math.sqrt(moveX * moveX + moveY * moveY);
         moveX /= len;
         moveY /= len;
       }
 
-      const seq = ++sequenceRef.current;
-
-      // Client-side prediction
-      const dx = moveX * MOVE_PER_TICK;
-      const dy = moveY * MOVE_PER_TICK;
+      const dx = moveX * PLAYER_SPEED * dt;
+      const dy = moveY * PLAYER_SPEED * dt;
       const wasMoving = velRef.current.x !== 0 || velRef.current.y !== 0;
-      velRef.current = { x: dx, y: dy };
+      velRef.current = { x: moveX * PLAYER_SPEED, y: moveY * PLAYER_SPEED };
 
       if (dx !== 0 || dy !== 0) {
         let newX = posRef.current.x;
         let newY = posRef.current.y;
-
-        if (map && canMoveTo(map, worldObjects, newX + dx, newY)) {
-          newX += dx;
-        }
-        if (map && canMoveTo(map, worldObjects, newX, newY + dy)) {
-          newY += dy;
-        }
-
+        if (!liveMap || canMoveTo(liveMap, objectsRef.current, newX + dx, newY)) newX += dx;
+        if (!liveMap || canMoveTo(liveMap, objectsRef.current, newX, newY + dy)) newY += dy;
         posRef.current = { x: newX, y: newY };
         setPosition({ x: newX, y: newY });
-        pendingInputsRef.current.push({ seq, dx, dy });
+        pendingInputsRef.current.push({ seq: sequenceRef.current + 1, dx, dy });
+        if (pendingInputsRef.current.length > 48) pendingInputsRef.current.shift();
       } else if (wasMoving) {
         setPosition({ x: posRef.current.x, y: posRef.current.y });
       }
 
-      // Only send input to server when there's movement or interaction
-      if (moveX !== 0 || moveY !== 0 || interactRef.current) {
-        const input: OwPlayerInputPayload = {
-          sequenceNumber: seq,
-          moveX,
-          moveY,
-          interact: interactRef.current,
-          timestamp: Date.now(),
-        };
-        interactRef.current = false;
-
-        send({
-          type: OwMessageTypes.PlayerInput,
-          playerInput: input,
-        });
-      } else {
-        interactRef.current = false;
+      sendAccRef.current += dt * 1000;
+      if (sendAccRef.current >= SEND_INTERVAL_MS) {
+        sendAccRef.current = 0;
+        if (moveX !== 0 || moveY !== 0 || interactRef.current) {
+          const seq = ++sequenceRef.current;
+          const input: OwPlayerInputPayload = {
+            sequenceNumber: seq,
+            moveX,
+            moveY,
+            interact: interactRef.current,
+            timestamp: Date.now(),
+          };
+          interactRef.current = false;
+          sendRef.current({
+            type: OwMessageTypes.PlayerInput,
+            playerInput: input,
+          });
+        } else {
+          interactRef.current = false;
+        }
       }
-    }, TICK_INTERVAL);
 
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+      rafRef.current = requestAnimationFrame(frame);
     };
-  }, [active, map, send]);
+
+    rafRef.current = requestAnimationFrame(frame);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+      lastFrameRef.current = 0;
+    };
+  }, [active]);
 
   return {
     position,

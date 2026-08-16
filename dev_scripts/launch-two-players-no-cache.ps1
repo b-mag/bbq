@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$backendExe = Join-Path $scriptDir "..\src\backend\bin\Release\net10.0\win-x64\publish\Carcosa.Server.exe"
+$backendExe = Join-Path $scriptDir "..\src\backend\bin\Release\net10.0\win-x64\publish\Carcosa.exe"
 $deadTrackerUrl = "http://127.0.0.1:1"
 
 if (-not (Test-Path $backendExe)) {

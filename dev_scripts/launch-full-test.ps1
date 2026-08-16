@@ -11,7 +11,7 @@
 # =============================================================================
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$backendExe = Join-Path $scriptDir "..\src\backend\bin\Release\net10.0\win-x64\publish\Carcosa.Server.exe"
+$backendExe = Join-Path $scriptDir "..\src\backend\bin\Release\net10.0\win-x64\publish\Carcosa.exe"
 $matchmakingExe = Join-Path $scriptDir "..\src\matchmaking\bin\Release\net10.0\win-x64\publish\Carcosa.Matchmaking.exe"
 
 # Check exes exist

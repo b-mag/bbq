@@ -147,7 +147,7 @@ export default function GameHUD({
       padding: '4px',
       background: '#0d0a07',
       overflow: 'hidden',
-    }}>
+    }} onContextMenu={e => e.preventDefault()}>
       {/* Left Panel — Character Stats */}
       <div style={{
         gridRow: '1 / 3',

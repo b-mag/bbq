@@ -14,6 +14,7 @@ import type { CSSProperties } from 'react';
 interface PauseMenuProps {
   onResume: () => void;
   onSettings: () => void;
+  onFriends: () => void;
   onQuit: () => void;
 }
 
@@ -27,7 +28,7 @@ const btnBase: CSSProperties = {
   letterSpacing: '0.04em',
 };
 
-export default function PauseMenu({ onResume, onSettings, onQuit }: PauseMenuProps) {
+export default function PauseMenu({ onResume, onSettings, onFriends, onQuit }: PauseMenuProps) {
   return (
     <div style={{
       position: 'absolute', inset: 0,
@@ -66,6 +67,12 @@ export default function PauseMenu({ onResume, onSettings, onQuit }: PauseMenuPro
             background: '#2a2218', border: '1px solid #c9a84c', color: '#c9a84c',
           }}>
             ⚙  Settings
+          </button>
+          <button onClick={onFriends} style={{
+            ...btnBase,
+            background: '#1a1820', border: '1px solid #6B3A9E', color: '#C9A8E0',
+          }}>
+            Friends
           </button>
           <button onClick={onQuit} style={{
             ...btnBase,

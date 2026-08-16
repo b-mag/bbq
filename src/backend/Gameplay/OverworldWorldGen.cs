@@ -512,6 +512,7 @@ internal static class OverworldWorldGen
 
         Add("dream_ship", X(0.56) + 0.5f, Y(0.945) + 0.5f, true, 3.2f);
         Add("npc_merek", X(0.54) + 0.5f, Y(0.94) + 0.5f, false, 0);
+        Add("old_book_husk", X(0.545) + 0.5f, Y(0.955) + 0.5f, true, 0.25f);
         Add("npc_agwan", X(0.505) + 0.5f, Y(0.888) + 0.5f, false, 0);
         Add("npc_agwan", X(0.535) + 0.5f, Y(0.888) + 0.5f, false, 0);
 

@@ -4,6 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Carcosa</AssemblyName>
     <RootNamespace>Carcosa.Server</RootNamespace>
 
     <!-- Native AOT Configuration -->

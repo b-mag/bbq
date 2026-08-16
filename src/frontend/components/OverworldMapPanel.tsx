@@ -18,12 +18,13 @@ interface OverworldMapPanelProps {
   localId: string | null;
   players: OwPlayerState[];
   landmarks: OwLandmarkData[];
+  seeBeyond?: { x: number; y: number; label: string; active: boolean } | null;
   onClose: () => void;
   onDevTeleport?: (x: number, y: number) => void;
 }
 
 export default function OverworldMapPanel({
-  map, fog, devMode, localX, localY, localId, players, landmarks, onClose, onDevTeleport,
+  map, fog, devMode, localX, localY, localId, players, landmarks, seeBeyond, onClose, onDevTeleport,
 }: OverworldMapPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const layoutRef = useRef({ scale: 1, ox: 0, oy: 0, dw: 0, dh: 0 });
@@ -97,6 +98,25 @@ export default function OverworldMapPanel({
       ctx.fill();
     }
 
+    if (seeBeyond) {
+      const mx = ox + seeBeyond.x * scale;
+      const my = oy + seeBeyond.y * scale;
+      const pulse = seeBeyond.active ? 0.55 + 0.45 * Math.sin(performance.now() / 280) : 0.45;
+      ctx.strokeStyle = `rgba(201, 168, 76, ${pulse})`;
+      ctx.fillStyle = `rgba(232, 208, 128, ${seeBeyond.active ? pulse : 0.55})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(mx, my, Math.max(5, scale * 3.4), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      if (seeBeyond.active) {
+        ctx.strokeStyle = `rgba(201, 168, 76, ${0.35 * pulse})`;
+        ctx.beginPath();
+        ctx.arc(mx, my, Math.max(9, scale * 6.5), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
     ctx.fillStyle = '#e8d080';
     ctx.strokeStyle = '#1a1410';
     ctx.lineWidth = 1.5;
@@ -104,11 +124,19 @@ export default function OverworldMapPanel({
     ctx.arc(ox + localX * scale, oy + localY * scale, Math.max(3, scale * 2.4), 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-  }, [map, fog, devMode, localX, localY, localId, players, landmarks]);
+  }, [map, fog, devMode, localX, localY, localId, players, landmarks, seeBeyond]);
 
   useEffect(() => {
     paint();
-  }, [paint]);
+    if (!seeBeyond?.active) return;
+    let raf = 0;
+    const loop = () => {
+      paint();
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [paint, seeBeyond?.active]);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!devMode || !onDevTeleport) return;
@@ -153,7 +181,9 @@ export default function OverworldMapPanel({
             The Map of Carcosa
           </h3>
           <span style={{ color: '#6a5d4a', fontSize: '0.7rem' }}>
-            {devMode ? 'Dev: click to travel  ·  ' : ''}M / ESC to close
+          {devMode ? 'Dev: click to travel  ·  ' : ''}
+            {seeBeyond ? `See Beyond: ${seeBeyond.label}${seeBeyond.active ? ' (pulsing)' : ''}  ·  ` : ''}
+            M / ESC to close
           </span>
         </div>
         <canvas

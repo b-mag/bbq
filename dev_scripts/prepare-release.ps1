@@ -29,14 +29,20 @@ $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
 # Same folder build_all_release.ps1 produces
 $backendDir = Join-Path $repoRoot "src\backend\bin\Release\net10.0\win-x64\publish"
 $legacyDir = Join-Path $repoRoot "src\backend\publish-release"
-$releaseExe = Join-Path $backendDir "Carcosa.Server.exe"
+$releaseExe = Join-Path $backendDir "Carcosa.exe"
 
 if (-not (Test-Path $releaseExe)) {
     # Fallback for older publish-release copy workflows
-    $legacyExe = Join-Path $legacyDir "Carcosa.Server.exe"
-    if (Test-Path $legacyExe) {
-        $backendDir = $legacyDir
-        $releaseExe = $legacyExe
+    foreach ($candidate in @(
+        (Join-Path $backendDir "Carcosa.Server.exe"),
+        (Join-Path $legacyDir "Carcosa.exe"),
+        (Join-Path $legacyDir "Carcosa.Server.exe")
+    )) {
+        if (Test-Path $candidate) {
+            $backendDir = Split-Path $candidate
+            $releaseExe = $candidate
+            break
+        }
     }
 }
 
@@ -107,7 +113,7 @@ $readme = @"
 
 ## Quick Start
 
-1. Double-click `Carcosa.Server.exe` to launch
+1. Double-click `Carcosa.exe` to launch
 2. The game window opens automatically (Edge app mode)
 3. Works fully offline / solo — the overworld map is compiled into the EXE
 4. If a tracker is configured and reachable, peers auto-discover

@@ -59,6 +59,7 @@ export class InputHandler {
   private mouseX: number = 0;
   private mouseY: number = 0;
   private mouseDown: boolean = false;
+  private rightMouseDown: boolean = false;
   private _aimAngle: number = 0;
   private _enabled: boolean = true;
   /** Reference to the canvas element for scoped mouse click events. */
@@ -72,6 +73,7 @@ export class InputHandler {
     this.handleKeyUp = this.handleKeyUp.bind(this);
     this.handleMouseMove = this.handleMouseMove.bind(this);
     this.handleCanvasMouseDown = this.handleCanvasMouseDown.bind(this);
+    this.handleCanvasContextMenu = this.handleCanvasContextMenu.bind(this);
     this.handleMouseUp = this.handleMouseUp.bind(this);
     this.handleBlur = this.handleBlur.bind(this);
   }
@@ -85,11 +87,12 @@ export class InputHandler {
     // Remove listeners from old canvas
     if (this._canvas) {
       this._canvas.removeEventListener('mousedown', this.handleCanvasMouseDown);
+      this._canvas.removeEventListener('contextmenu', this.handleCanvasContextMenu);
     }
     this._canvas = canvas;
-    // Add listeners to new canvas
     if (this._canvas) {
       this._canvas.addEventListener('mousedown', this.handleCanvasMouseDown);
+      this._canvas.addEventListener('contextmenu', this.handleCanvasContextMenu);
     }
   }
 
@@ -118,6 +121,7 @@ export class InputHandler {
     // Clean up canvas listeners
     if (this._canvas) {
       this._canvas.removeEventListener('mousedown', this.handleCanvasMouseDown);
+      this._canvas.removeEventListener('contextmenu', this.handleCanvasContextMenu);
     }
   }
 
@@ -130,6 +134,7 @@ export class InputHandler {
     if (!value) {
       this.keys.clear();
       this.mouseDown = false;
+      this.rightMouseDown = false;
     }
   }
 
@@ -169,7 +174,7 @@ export class InputHandler {
       moveY,
       // HYBRID FIRE: left-click on canvas OR spacebar triggers primary fire
       primaryFire: this.mouseDown || this.keys.has(' '),
-      secondaryAbility: this.keys.has('e'),
+      secondaryAbility: this.rightMouseDown || this.keys.has('e'),
       interact: this.keys.has('f'),
       useMedKit: this.keys.has('h'),
       aimAngle: this._aimAngle,
@@ -233,11 +238,17 @@ export class InputHandler {
    */
   private handleCanvasMouseDown(e: MouseEvent): void {
     if (!this._enabled) return;
-    if (e.button === 0) { // Left click only
+    if (e.button === 0) {
       this.mouseDown = true;
-      // Prevent canvas click from bubbling to other handlers
+      e.preventDefault();
+    } else if (e.button === 2) {
+      this.rightMouseDown = true;
       e.preventDefault();
     }
+  }
+
+  private handleCanvasContextMenu(e: Event): void {
+    e.preventDefault();
   }
 
   /**
@@ -246,6 +257,8 @@ export class InputHandler {
   private handleMouseUp(e: MouseEvent): void {
     if (e.button === 0) {
       this.mouseDown = false;
+    } else if (e.button === 2) {
+      this.rightMouseDown = false;
     }
   }
 
@@ -253,5 +266,6 @@ export class InputHandler {
     // Clear all input state when window loses focus
     this.keys.clear();
     this.mouseDown = false;
+    this.rightMouseDown = false;
   }
 }

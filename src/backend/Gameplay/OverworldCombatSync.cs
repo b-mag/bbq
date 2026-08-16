@@ -63,6 +63,7 @@ public sealed class OverworldCombatSync
     private readonly MetricsCollector _metricsCollector;
     private readonly SaveManager? _saveManager;
     private MeshPartyManager? _partyManager;
+    private QuestProgression? _quest;
     private readonly CancellationTokenSource _cts = new();
     private Task? _tickLoop;
     private bool _loadoutLocked;
@@ -147,6 +148,32 @@ public sealed class OverworldCombatSync
 
     /// <summary>Wire party manager after DI construction (avoids circular deps).</summary>
     public void SetPartyManager(MeshPartyManager partyManager) => _partyManager = partyManager;
+
+    /// <summary>Wire local quest/key-item state (save-backed, never meshed).</summary>
+    public void SetQuest(QuestProgression quest)
+    {
+        _quest = quest;
+        if (_saveManager != null)
+            quest.LoadFrom(_saveManager.CurrentData);
+    }
+
+    /// <summary>Copy overworld loadout onto a dungeon /ws player entity.</summary>
+    public void CopyLoadoutToDungeonPlayer(Entity dungeonPlayer)
+    {
+        dungeonPlayer.PrimaryAbility = _localPlayer.PrimaryAbility;
+        dungeonPlayer.SecondaryAbility = _localPlayer.SecondaryAbility;
+        dungeonPlayer.Level = _localPlayer.Level;
+        dungeonPlayer.MaxHealth = _localPlayer.MaxHealth;
+        dungeonPlayer.Health = Math.Min(_localPlayer.Health, dungeonPlayer.MaxHealth);
+        dungeonPlayer.MaxStamina = _localPlayer.MaxStamina;
+        dungeonPlayer.Stamina = _localPlayer.Stamina;
+        dungeonPlayer.StaminaRegenRate = _localPlayer.StaminaRegenRate;
+        dungeonPlayer.Damage = _localPlayer.Damage;
+        dungeonPlayer.Defense = _localPlayer.Defense;
+        dungeonPlayer.Speed = _localPlayer.Speed;
+        dungeonPlayer.StaminaCostReduction = _localPlayer.StaminaCostReduction;
+        dungeonPlayer.BonusHealAmount = _localPlayer.BonusHealAmount;
+    }
 
     /// <summary>When true, equip/ability changes are refused (in dungeon).</summary>
     public bool LoadoutLocked
@@ -941,6 +968,8 @@ public sealed class OverworldCombatSync
         if (!data.UnlockedAbilityIds.Contains("soul_projection"))
             data.UnlockedAbilityIds.Add("soul_projection");
 
+        _quest?.LoadFrom(data);
+
         Console.WriteLine($"[Save] Applied to combat: Lv{_localPlayer.Level} at ({restoreX:F1},{restoreY:F1})");
     }
 
@@ -951,9 +980,9 @@ public sealed class OverworldCombatSync
         var equip = _inventory.GetEquipmentForSave();
         var backpack = _inventory.GetBackpackForSave();
 
-        return new PlayerSaveData
+        var data = new PlayerSaveData
         {
-            Version = 2,
+            Version = 3,
             DisplayName = string.IsNullOrWhiteSpace(_localIdentity.DisplayName)
                 ? existing.DisplayName
                 : _localIdentity.DisplayName,
@@ -990,7 +1019,22 @@ public sealed class OverworldCombatSync
             WasInDungeon = existing.WasInDungeon,
             CreatedAt = existing.CreatedAt == default ? DateTime.UtcNow : existing.CreatedAt,
             LastSavedAt = DateTime.UtcNow,
+            KeyItemIds = existing.KeyItemIds,
+            Friends = existing.Friends,
+            NecronomiconQuestStage = existing.NecronomiconQuestStage,
+            DefeatedDungeonIds = existing.DefeatedDungeonIds,
+            NecronomiconFunctions = existing.NecronomiconFunctions,
+            CollectedWorldObjectIds = existing.CollectedWorldObjectIds,
+            DugSpotIds = existing.DugSpotIds,
+            SeeBeyondAreaId = existing.SeeBeyondAreaId,
+            SeeBeyondX = existing.SeeBeyondX,
+            SeeBeyondY = existing.SeeBeyondY,
+            SeeBeyondLabel = existing.SeeBeyondLabel,
+            SeeBeyondActive = existing.SeeBeyondActive,
+            NecronomiconRank = existing.NecronomiconRank,
         };
+        _quest?.WriteTo(data);
+        return data;
     }
 
     public void MarkEnteredDungeon(float safeX, float safeY)

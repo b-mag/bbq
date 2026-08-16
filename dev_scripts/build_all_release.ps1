@@ -4,7 +4,7 @@
 # executables. Includes React frontends for game and dashboard.
 #
 # Output:
-#   bbq/src/backend/bin/Release/net10.0/win-x64/publish/Carcosa.Server.exe
+#   bbq/src/backend/bin/Release/net10.0/win-x64/publish/Carcosa.exe
 #   bbq/src/matchmaking/bin/Release/net10.0/win-x64/publish/Carcosa.Matchmaking.exe
 #   bbq/src/botclient/bin/Release/net10.0/win-x64/publish/Carcosa.BotClient.exe
 # =============================================================================
@@ -26,7 +26,7 @@ Write-Host "This may take several minutes..." -ForegroundColor Gray
 Write-Host ""
 
 # Kill any running instances that could lock the output files
-Get-Process -Name "Carcosa.Server", "Carcosa.Matchmaking", "Carcosa.BotClient" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name "Carcosa", "Carcosa.Server", "Carcosa.Matchmaking", "Carcosa.BotClient" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 # Kill the dotnet build server which can hold file locks between builds
 & dotnet build-server shutdown 2>$null | Out-Null
 Start-Sleep -Seconds 1
@@ -42,7 +42,7 @@ if (Test-Path "wwwroot") { Remove-Item -Recurse -Force "wwwroot" -ErrorAction Si
 if (Test-Path "bin\Release") { Remove-Item -Recurse -Force "bin\Release" -ErrorAction SilentlyContinue }
 dotnet publish -c Release -r win-x64
 if ($LASTEXITCODE -eq 0) {
-    $exe = Join-Path (Get-Location) "bin\Release\net10.0\win-x64\publish\Carcosa.Server.exe"
+    $exe = Join-Path (Get-Location) "bin\Release\net10.0\win-x64\publish\Carcosa.exe"
     if (Test-Path $exe) {
         $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
         Write-Host "      PASSED ($size MB)" -ForegroundColor Green
@@ -99,7 +99,7 @@ if ($failed.Count -eq 0) {
     Write-Host "  ALL BUILDS SUCCEEDED (Release AOT)" -ForegroundColor Green
     Write-Host ""
     Write-Host "  Outputs:" -ForegroundColor Gray
-    Write-Host "    src/backend/bin/Release/net10.0/win-x64/publish/Carcosa.Server.exe" -ForegroundColor Gray
+    Write-Host "    src/backend/bin/Release/net10.0/win-x64/publish/Carcosa.exe" -ForegroundColor Gray
     Write-Host "    src/matchmaking/bin/Release/net10.0/win-x64/publish/Carcosa.Matchmaking.exe" -ForegroundColor Gray
     Write-Host "    src/botclient/bin/Release/net10.0/win-x64/publish/Carcosa.BotClient.exe" -ForegroundColor Gray
 } else {

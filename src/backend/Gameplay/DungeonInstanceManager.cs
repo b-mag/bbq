@@ -27,6 +27,7 @@ public sealed class DungeonInstanceManager
     private readonly OverworldCombatSync _combat;
     private readonly MeshPartyManager _party;
     private readonly MetricsCollector _metrics;
+    private readonly QuestProgression _quest;
     private readonly object _lock = new();
 
     private ActiveDungeon? _active;
@@ -36,13 +37,15 @@ public sealed class DungeonInstanceManager
         PeerIdentity localIdentity,
         OverworldCombatSync combat,
         MeshPartyManager party,
-        MetricsCollector metrics)
+        MetricsCollector metrics,
+        QuestProgression quest)
     {
         _mesh = mesh;
         _localIdentity = localIdentity;
         _combat = combat;
         _party = party;
         _metrics = metrics;
+        _quest = quest;
         _mesh.OnPeerMessage += HandlePeerMessage;
     }
 
@@ -141,7 +144,7 @@ public sealed class DungeonInstanceManager
             },
         });
 
-        ApplyDungeonComplete(instanceId);
+        ApplyDungeonComplete(instanceId, victory);
     }
 
     private void HandlePeerMessage(PeerConnection connection, PeerMessage message)
@@ -154,7 +157,7 @@ public sealed class DungeonInstanceManager
 
         if (message.Type == PeerMessageTypes.DungeonComplete && message.DungeonComplete != null)
         {
-            ApplyDungeonComplete(message.DungeonComplete.InstanceId);
+            ApplyDungeonComplete(message.DungeonComplete.InstanceId, message.DungeonComplete.Victory);
         }
     }
 
@@ -184,18 +187,23 @@ public sealed class DungeonInstanceManager
             $"instance={payload.InstanceId} seed={payload.Seed} host={payload.HostPeerId}");
     }
 
-    private void ApplyDungeonComplete(string instanceId)
+    private void ApplyDungeonComplete(string instanceId, bool victory)
     {
+        string? scenario;
         lock (_lock)
         {
             if (_active == null) return;
             if (!string.Equals(_active.InstanceId, instanceId, StringComparison.Ordinal))
                 return;
+            scenario = _active.Scenario;
             _active = null;
         }
 
+        if (victory && scenario != null)
+            _quest.NotifyDungeonComplete(scenario, true);
+
         _combat.MarkLeftDungeon();
-        Console.WriteLine($"[Dungeon] Left instance {instanceId}");
+        Console.WriteLine($"[Dungeon] Left instance {instanceId} victory={victory}");
     }
 
     private static TileMap GenerateMap(string scenario, int seed)

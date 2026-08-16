@@ -12,7 +12,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useOverworldInput } from '@/hooks/useOverworldInput';
 import { OwDungeonEntranceData, OwWorldObjectData, OwLandmarkData } from '@/lib/overworld-messages';
-import { OverworldGameMap, decodeOverworldMap, buildLakeOverlay, nearestOwWalkable } from '@/lib/overworld-map';
+import { OverworldGameMap, decodeOverworldMap, buildLakeOverlay, nearestOwWalkable, getOwTile } from '@/lib/overworld-map';
 import { FogOfWar } from '@/lib/engine/fogOfWar';
 import OverworldCanvas from './OverworldCanvas';
 import OverworldMapPanel from './OverworldMapPanel';
@@ -30,6 +30,8 @@ import FlameOfferingPanel from './FlameOfferingPanel';
 import DialoguePanel from './DialoguePanel';
 import CryptolShopPanel from './CryptolShopPanel';
 import SaveIndicator from './SaveIndicator';
+import KeyItemsPanel from './KeyItemsPanel';
+import FriendsPanel from './FriendsPanel';
 import { useP2POverworld } from '@/hooks/useP2POverworld';
 import { usePlayerStats } from '@/hooks/usePlayerStats';
 import { useOverworldEnemies } from '@/hooks/useOverworldEnemies';
@@ -94,6 +96,15 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
   const [dialogue, setDialogue] = useState<{ key: string; data: NpcDialogue; page: number } | null>(null);
   const [nearbyBuilding, setNearbyBuilding] = useState<OwWorldObjectData | null>(null);
   const [nearbyNpc, setNearbyNpc] = useState<OwWorldObjectData | null>(null);
+  const [nearbyHusk, setNearbyHusk] = useState<OwWorldObjectData | null>(null);
+  const [showKeyItems, setShowKeyItems] = useState(false);
+  const [showFriends, setShowFriends] = useState(false);
+  const [questToast, setQuestToast] = useState<string | null>(null);
+  const [collectedIds, setCollectedIds] = useState<string[]>([]);
+  const [hasShovel, setHasShovel] = useState(false);
+  const [seeBeyond, setSeeBeyond] = useState<{
+    x: number; y: number; label: string; active: boolean;
+  } | null>(null);
 
   const p2p = useP2POverworld();
   const stats = usePlayerStats();
@@ -106,10 +117,12 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
   const playersRef = useRef(p2p.players);
   playersRef.current = p2p.players;
   const declinedInvitesRef = useRef<Set<string>>(new Set());
-  const anyPanelOpen = showPauseMenu || showSettings || showInventory || showAbilitySelect || showFlameOffering || showShop || showMap || !!dialogue;
+  const anyPanelOpen = showPauseMenu || showSettings || showInventory || showAbilitySelect || showFlameOffering || showShop || showMap || !!dialogue || showKeyItems || showFriends;
 
   const activeMap = interior?.map ?? map;
-  const activeObjects = interior?.objects ?? worldObjects;
+  const activeObjects = (interior?.objects ?? worldObjects).filter(
+    o => o.type !== 'old_book_husk' || !collectedIds.includes('old_book_husk')
+  );
 
   const input = useOverworldInput({
     send: () => {},
@@ -141,12 +154,68 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
     input.setInitialPosition(retX, retY + 1.2);
   }, [interior, input]);
 
-  const openDialogue = useCallback((obj: OwWorldObjectData) => {
-    const data = dialogueFor(obj.type);
-    if (!data) return;
-    setDialogue({ key: obj.type, data, page: 0 });
-    pushPanel('dialogue');
+  const showToast = useCallback((text: string) => {
+    setQuestToast(text);
+    window.setTimeout(() => setQuestToast(null), 4200);
   }, []);
+
+  const openDialogue = useCallback((obj: OwWorldObjectData) => {
+    const run = async () => {
+      if (obj.type === 'npc_merek') {
+        try {
+          const res = await fetch('/api/gameplay/npc-talk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ npcType: obj.type }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setDialogue({
+              key: obj.type,
+              data: { name: data.name || 'Merek', lines: data.lines || ['...'] },
+              page: 0,
+            });
+            pushPanel('dialogue');
+            return;
+          }
+        } catch { /* fall through to static copy */ }
+      }
+      const data = dialogueFor(obj.type);
+      if (!data) return;
+      setDialogue({ key: obj.type, data, page: 0 });
+      pushPanel('dialogue');
+    };
+    void run();
+  }, []);
+
+  const pickupHusk = useCallback(async () => {
+    try {
+      const res = await fetch('/api/gameplay/world-pickup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ objectType: 'old_book_husk' }),
+      });
+      const data = res.ok ? await res.json() : null;
+      showToast(data?.message || 'The sand is empty.');
+      if (data?.success) setCollectedIds(prev => prev.includes('old_book_husk') ? prev : [...prev, 'old_book_husk']);
+    } catch { /* ignore */ }
+  }, [showToast]);
+
+  const tryDig = useCallback(async () => {
+    if (!map) return;
+    const x = input.position.x;
+    const y = input.position.y;
+    const tile = getOwTile(map, Math.floor(x), Math.floor(y));
+    try {
+      const res = await fetch('/api/gameplay/dig', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x, y, tileType: tile }),
+      });
+      const data = res.ok ? await res.json() : null;
+      showToast(data?.message || 'The ground refuses.');
+    } catch { /* ignore */ }
+  }, [map, input.position.x, input.position.y, showToast]);
 
   const openFlame = useCallback(() => {
     if (showFlameOffering) return;
@@ -221,6 +290,8 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         else if (showInventory) { setShowInventory(false); removePanel('inventory'); }
         else if (showAbilitySelect) { setShowAbilitySelect(false); removePanel('ability-select'); }
         else if (interior) { exitInterior(); }
+        else if (showKeyItems) { setShowKeyItems(false); removePanel('key-items'); }
+        else if (showFriends) { setShowFriends(false); removePanel('friends'); }
         else if (showPauseMenu) { setShowPauseMenu(false); removePanel('pause-menu'); }
         else { setShowPauseMenu(true); pushPanel('pause-menu'); }
         return;
@@ -249,6 +320,22 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         return;
       }
 
+      if (e.key === 'k' || e.key === 'K') {
+        if (showKeyItems) {
+          setShowKeyItems(false);
+          removePanel('key-items');
+        } else if (!dialogue && !showShop && !showSettings && !showPauseMenu) {
+          setShowKeyItems(true);
+          pushPanel('key-items');
+        }
+        return;
+      }
+
+      if (e.key === 'g' || e.key === 'G') {
+        void tryDig();
+        return;
+      }
+
       if (anyPanelOpen) return;
 
       if (e.key === 'i' || e.key === 'I') {
@@ -268,6 +355,8 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
           } else {
             exitInterior();
           }
+        } else if (nearbyHusk) {
+          void pickupHusk();
         } else if (nearbyNpc) {
           openDialogue(nearbyNpc);
         } else if (nearbyBuilding) {
@@ -285,8 +374,8 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
   }, [
     chatFocused, anyPanelOpen, showSettings, showFlameOffering, showInventory,
     showAbilitySelect, showPauseMenu, showShop, showMap, nearbyEntrance, nearbyAltar,
-    nearbyBuilding, nearbyNpc, interior, dialogue, enterDungeon, openFlame,
-    enterInterior, exitInterior, openDialogue,
+    nearbyBuilding, nearbyNpc, nearbyHusk, interior, dialogue, enterDungeon, openFlame,
+    enterInterior, exitInterior, openDialogue, pickupHusk, tryDig, showKeyItems, showFriends,
   ]);
 
   // Load overworld map from local server REST API
@@ -432,7 +521,13 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
       return Math.sqrt((o.x - pos.x) ** 2 + (o.y - pos.y) ** 2) < 1.8;
     });
     setNearbyNpc(npc || null);
-  }, [input.position, dungeonEntrances, worldObjects, landmarks, interior, lakeDrained, enemies]);
+
+    const husk = activeObjects.find(o => {
+      if (o.type !== 'old_book_husk') return false;
+      return Math.sqrt((o.x - pos.x) ** 2 + (o.y - pos.y) ** 2) < 1.6;
+    });
+    setNearbyHusk(husk || null);
+  }, [input.position, dungeonEntrances, worldObjects, landmarks, interior, lakeDrained, enemies, activeObjects]);
 
   useEffect(() => {
     if (!interior) return;
@@ -442,6 +537,31 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
       exitInterior();
     }
   }, [interior, input.position, exitInterior]);
+
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/gameplay/quest');
+        if (!res.ok) return;
+        const data = await res.json();
+        setCollectedIds(data.collectedWorldObjectIds || []);
+        setHasShovel(!!data.hasShovel);
+        if (data.seeBeyondAreaId) {
+          setSeeBeyond({
+            x: data.seeBeyondX,
+            y: data.seeBeyondY,
+            label: data.seeBeyondLabel || data.seeBeyondAreaId,
+            active: !!data.seeBeyondActive,
+          });
+        } else {
+          setSeeBeyond(null);
+        }
+      } catch { /* ignore */ }
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     const poll = async () => {
@@ -756,7 +876,19 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         </div>
       )}
 
-      {!nearbyEntrance && !nearbyBuilding && !interior && nearbyNpc && (
+      {!nearbyEntrance && !nearbyBuilding && !interior && nearbyHusk && (
+        <div style={{
+          position: 'absolute', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+          padding: '10px 20px', background: 'rgba(26, 18, 8, 0.92)',
+          border: '1px solid #C9A84C', borderRadius: 6, color: '#e8dcc8',
+          textAlign: 'center', fontSize: '0.85rem',
+        }}>
+          <div style={{ color: '#C9A84C', fontWeight: 'bold' }}>Old Book Husk</div>
+          <div style={{ color: '#9a8b74', marginTop: 4 }}>Press <strong>E</strong> to take it</div>
+        </div>
+      )}
+
+      {!nearbyEntrance && !nearbyBuilding && !nearbyHusk && !interior && nearbyNpc && (
         <div style={{
           position: 'absolute', bottom: 80, left: '50%', transform: 'translateX(-50%)',
           padding: '10px 20px', background: 'rgba(15, 5, 24, 0.92)',
@@ -823,7 +955,7 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         background: 'rgba(13, 15, 7, 0.7)', borderRadius: 4,
         color: '#6a5d4a', fontSize: '0.65rem',
       }}>
-        WASD: Move | LMB: Attack | RMB: Secondary | E: Interact | F: Flame | I: Inventory | M: Map | ESC: Pause | Enter: Chat
+        WASD: Move | LMB: Attack | RMB: Secondary | E: Interact | F: Flame | I: Inventory | K: Key Items | G: Dig | M: Map | ESC: Pause | Enter: Chat
       </div>
 
       <P2POverlay
@@ -838,6 +970,7 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         <PauseMenu
           onResume={() => { setShowPauseMenu(false); removePanel('pause-menu'); }}
           onSettings={() => { setShowSettings(true); pushPanel('settings'); }}
+          onFriends={() => { setShowFriends(true); pushPanel('friends'); }}
           onQuit={onDisconnect}
         />
       )}
@@ -852,6 +985,7 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
           localId={resolvedLocalId}
           players={displayPlayers}
           landmarks={landmarks}
+          seeBeyond={seeBeyond}
           onClose={() => { setShowMap(false); removePanel('overworld-map'); persistFog(); }}
           onDevTeleport={clientSettings.devMode ? handleDevTeleport : undefined}
         />
@@ -909,6 +1043,42 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         <FlameOfferingPanel
           onClose={() => { setShowFlameOffering(false); removePanel('flame-offering'); }}
         />
+      )}
+
+      {showKeyItems && (
+        <KeyItemsPanel
+          onClose={() => { setShowKeyItems(false); removePanel('key-items'); }}
+          onToast={showToast}
+        />
+      )}
+
+      {showFriends && (
+        <FriendsPanel
+          onClose={() => { setShowFriends(false); removePanel('friends'); }}
+        />
+      )}
+
+      {hasShovel && !interior && (
+        <div style={{
+          position: 'absolute', bottom: 14, right: 16,
+          padding: '4px 10px', background: 'rgba(13, 10, 6, 0.82)',
+          border: '1px solid #4A3A22', borderRadius: 4,
+          color: '#9a8b74', fontSize: '0.7rem', fontFamily: 'Georgia, serif',
+        }}>
+          G — dig (sand, ash, path, desert)
+        </div>
+      )}
+
+      {questToast && (
+        <div style={{
+          position: 'absolute', top: 72, left: '50%', transform: 'translateX(-50%)',
+          maxWidth: 480, padding: '10px 16px',
+          background: 'rgba(13, 10, 6, 0.94)', border: '1px solid #C9A84C',
+          borderRadius: 6, color: '#E8DCC8', fontFamily: 'Georgia, serif',
+          fontSize: '0.85rem', zIndex: 1100, textAlign: 'center',
+        }}>
+          {questToast}
+        </div>
       )}
     </div>
   );

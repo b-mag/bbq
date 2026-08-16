@@ -154,6 +154,7 @@ builder.Services.AddSingleton(sp => new MetricsCollector(
 builder.Services.AddSingleton<EnemySpawner>();
 builder.Services.AddSingleton<LootDropManager>();
 builder.Services.AddSingleton<PlayerInventory>();
+builder.Services.AddSingleton<QuestProgression>();
 builder.Services.AddSingleton(sp => new OverworldCombatSync(
     sp.GetRequiredService<PeerMesh>(),
     sp.GetRequiredService<PeerIdentity>(),
@@ -194,14 +195,17 @@ builder.Services.AddSingleton<SessionManager>(sp =>
     var cm = sp.GetRequiredService<ConnectionManager>();
     var gl = sp.GetRequiredService<GameLoop>();
     var cs = sp.GetRequiredService<CryptolStore>();
-    return new SessionManager(cm, gl, cs);
+    var combat = sp.GetRequiredService<OverworldCombatSync>();
+    var quest = sp.GetRequiredService<QuestProgression>();
+    return new SessionManager(cm, gl, cs, combat, quest);
 });
 builder.Services.AddSingleton(sp => new DungeonInstanceManager(
     sp.GetRequiredService<PeerMesh>(),
     sp.GetRequiredService<PeerIdentity>(),
     sp.GetRequiredService<OverworldCombatSync>(),
     sp.GetRequiredService<MeshPartyManager>(),
-    sp.GetRequiredService<MetricsCollector>()));
+    sp.GetRequiredService<MetricsCollector>(),
+    sp.GetRequiredService<QuestProgression>()));
 
 builder.WebHost.ConfigureKestrel(options =>
 {
@@ -289,7 +293,10 @@ overworldSync.Start();
 // Start the overworld combat sync (enemy AI, projectile processing, P2P combat)
 var combatSync = app.Services.GetRequiredService<OverworldCombatSync>();
 var partyManager = app.Services.GetRequiredService<MeshPartyManager>();
+var questProgression = app.Services.GetRequiredService<QuestProgression>();
 combatSync.SetPartyManager(partyManager);
+combatSync.SetQuest(questProgression);
+questProgression.SetPersist(() => saveManager.Save(combatSync.BuildSaveData()));
 combatSync.Start();
 
 Console.WriteLine($"[P2P:Init] Local player '{peerIdentity.DisplayName}' Lv{combatSync.LocalPlayer.Level} at ({combatSync.LocalPlayer.X:F1}, {combatSync.LocalPlayer.Y:F1})");
@@ -949,11 +956,18 @@ app.MapPost("/api/gameplay/equip", (EquipRequest request, PlayerInventory invent
 });
 
 // Pick up loot from ground
-app.MapPost("/api/gameplay/pickup-loot", async (PickupLootRequest request, OverworldCombatSync combat, PlayerInventory inventory, PeerIdentity identity) =>
+app.MapPost("/api/gameplay/pickup-loot", async (PickupLootRequest request, OverworldCombatSync combat, PlayerInventory inventory, PeerIdentity identity, QuestProgression quest) =>
 {
     var drop = await combat.TryPickUpLootAsync(request.DropId, identity.PeerId);
     if (drop == null)
         return Results.Ok(new PickupLootResponse(false, null, "Drop not found or not eligible"));
+
+    var dropDef = ItemRegistry.GetItem(drop.ItemId);
+    if (dropDef?.Slot == ItemSlot.KeyItem)
+    {
+        quest.GrantKeyItem(drop.ItemId);
+        return Results.Ok(new PickupLootResponse(true, drop.ItemId, null));
+    }
 
     if (!inventory.AddItem(drop.ItemId, drop.Quantity))
         return Results.Ok(new PickupLootResponse(false, null, "Inventory full"));
@@ -1051,6 +1065,59 @@ app.MapPost("/api/gameplay/shop/buy", (ShopBuyRequest request, CryptolStore cryp
     return Results.Ok(new ShopBuyResponse(true, balance, "The merchant nods."));
 });
 
+app.MapGet("/api/gameplay/quest", (QuestProgression quest) => Results.Ok(quest.Snapshot()));
+
+app.MapPost("/api/gameplay/npc-talk", (NpcTalkRequest request, QuestProgression quest) =>
+{
+    if (string.IsNullOrWhiteSpace(request.NpcType))
+        return Results.BadRequest(new CombatActionResponse(false, "npcType required"));
+    var result = quest.TalkToNpc(request.NpcType);
+    return Results.Ok(new NpcTalkResponse(result.Name, result.Lines, result.Advanced, result.Stage));
+});
+
+app.MapPost("/api/gameplay/world-pickup", (WorldPickupApiRequest request, QuestProgression quest) =>
+{
+    if (string.IsNullOrWhiteSpace(request.ObjectType))
+        return Results.Ok(new WorldPickupResponse(false, null, "Nothing to take."));
+    var result = quest.PickupWorldObject(request.ObjectType);
+    return Results.Ok(new WorldPickupResponse(result.Success, result.ItemId, result.Message));
+});
+
+app.MapPost("/api/gameplay/key-items/use", (UseKeyItemRequest request, QuestProgression quest) =>
+{
+    if (string.IsNullOrWhiteSpace(request.ItemId))
+        return Results.Ok(new UseKeyItemResponse(false, "itemId required"));
+    var result = quest.UseKeyItem(request.ItemId);
+    return Results.Ok(new UseKeyItemResponse(result.Success, result.Message));
+});
+
+app.MapGet("/api/gameplay/friends", (QuestProgression quest, PeerMesh mesh, PeerIdentity identity) =>
+{
+    var snap = quest.Snapshot();
+    var connected = mesh.Connections.Select(c => new ConnectedPeerFriend(
+        c.RemotePeerId, c.RemoteDisplayName, c.LatencyMs, quest.IsFriend(c.RemotePeerId))).ToArray();
+    return Results.Ok(new FriendsResponse(identity.PeerId, snap.Friends, connected));
+});
+
+app.MapPost("/api/gameplay/friends", (FriendToggleRequest request, QuestProgression quest, PeerMesh mesh) =>
+{
+    if (string.IsNullOrWhiteSpace(request.PeerId))
+        return Results.BadRequest(new CombatActionResponse(false, "peerId required"));
+    var name = mesh.Connections.FirstOrDefault(c => c.RemotePeerId == request.PeerId)?.RemoteDisplayName
+        ?? request.DisplayName;
+    var isFriend = quest.ToggleFriend(request.PeerId, name);
+    return Results.Ok(new FriendToggleResponse(isFriend, request.PeerId));
+});
+
+app.MapPost("/api/gameplay/dig", (DigRequest request, QuestProgression quest, PlayerInventory inventory) =>
+{
+    var tx = (int)MathF.Floor(request.X);
+    var ty = (int)MathF.Floor(request.Y);
+    var tile = request.TileType;
+    var result = DigSystem.TryDig(quest, inventory, request.X, request.Y, (byte)Math.Clamp(tile, 0, 255));
+    return Results.Ok(new DigResponse(result.Success, result.Message, result.ItemId, result.KeyItem, tx, ty));
+});
+
 app.MapGet("/api/gameplay/dungeon", (DungeonInstanceManager dungeons) =>
 {
     var snap = dungeons.GetActiveInstance();
@@ -1061,9 +1128,16 @@ app.MapGet("/api/gameplay/dungeon", (DungeonInstanceManager dungeons) =>
         snap.AvgLevel, snap.Phase, snap.IsLocalHost));
 });
 
-app.MapPost("/api/gameplay/dungeon/enter", async (DungeonEnterRequest request, DungeonInstanceManager dungeons) =>
+app.MapPost("/api/gameplay/dungeon/enter", async (DungeonEnterRequest request, DungeonInstanceManager dungeons, SessionManager sessions) =>
 {
     var scenario = string.IsNullOrWhiteSpace(request.Scenario) ? "mountain_cave" : request.Scenario;
+    sessions.SelectedScenario = scenario.Trim().ToLowerInvariant().Replace("-", "_") switch
+    {
+        "mountain_cave" or "mountaincave" or "cave" => MapScenario.MountainCave,
+        "pallid_sanctum" or "pallidsanctum" or "temple" => MapScenario.PallidSanctum,
+        "hollow" => MapScenario.Hollow,
+        _ => MapScenario.DrownedDock,
+    };
     var started = await dungeons.EnterDungeonAsync(scenario, request.EntranceX, request.EntranceY);
     var snap = dungeons.GetActiveInstance();
     var map = dungeons.ActiveMap;
@@ -1436,6 +1510,18 @@ internal record DungeonInstanceResponse(
     bool IsLocalHost);
 internal record DungeonMapResponse(int Width, int Height, int Seed, string TilesBase64);
 internal record DungeonEnterResponse(bool Started, DungeonInstanceResponse? Instance, DungeonMapResponse? Map);
+internal record NpcTalkRequest(string NpcType);
+internal record NpcTalkResponse(string Name, string[] Lines, bool Advanced, string Stage);
+internal record WorldPickupApiRequest(string ObjectType);
+internal record WorldPickupResponse(bool Success, string? ItemId, string Message);
+internal record UseKeyItemRequest(string ItemId);
+internal record UseKeyItemResponse(bool Success, string Message);
+internal record ConnectedPeerFriend(string PeerId, string DisplayName, int LatencyMs, bool IsFriend);
+internal record FriendsResponse(string LocalPeerId, FriendEntry[] Friends, ConnectedPeerFriend[] Connected);
+internal record FriendToggleRequest(string PeerId, string? DisplayName);
+internal record FriendToggleResponse(bool IsFriend, string PeerId);
+internal record DigRequest(float X, float Y, int TileType);
+internal record DigResponse(bool Success, string Message, string? ItemId, bool KeyItem, int TileX, int TileY);
 
 /// <summary>
 /// Source-generated JSON context for HTTP API response types.
@@ -1489,6 +1575,25 @@ internal record DungeonEnterResponse(bool Started, DungeonInstanceResponse? Inst
 [JsonSerializable(typeof(DungeonCompleteRequest))]
 [JsonSerializable(typeof(DungeonInstanceResponse))]
 [JsonSerializable(typeof(DungeonEnterResponse))]
+[JsonSerializable(typeof(QuestSnapshot))]
+[JsonSerializable(typeof(KeyItemEntry))]
+[JsonSerializable(typeof(KeyItemEntry[]))]
+[JsonSerializable(typeof(FriendEntry))]
+[JsonSerializable(typeof(FriendEntry[]))]
+[JsonSerializable(typeof(NpcTalkRequest))]
+[JsonSerializable(typeof(NpcTalkResponse))]
+[JsonSerializable(typeof(WorldPickupApiRequest))]
+[JsonSerializable(typeof(WorldPickupResponse))]
+[JsonSerializable(typeof(UseKeyItemRequest))]
+[JsonSerializable(typeof(UseKeyItemResponse))]
+[JsonSerializable(typeof(ConnectedPeerFriend))]
+[JsonSerializable(typeof(ConnectedPeerFriend[]))]
+[JsonSerializable(typeof(FriendsResponse))]
+[JsonSerializable(typeof(FriendToggleRequest))]
+[JsonSerializable(typeof(FriendToggleResponse))]
+[JsonSerializable(typeof(DigRequest))]
+[JsonSerializable(typeof(DigResponse))]
+[JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(DungeonMapResponse))]
 [JsonSerializable(typeof(BootstrapResponse))]
 [JsonSerializable(typeof(SettingsResponse))]

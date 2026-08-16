@@ -3,7 +3,7 @@
  *
  * Keys match world-object / enemy `type` (npc_cassilda, npc_fisher, …).
  * `lines` are shown one page at a time; E or click advances, Escape closes.
- * No quest flags yet — this is flavor and atmosphere only.
+ * Merek is quest-driven (POST /api/gameplay/npc-talk). Static copy below is fallback.
  */
 
 export interface NpcDialogue {

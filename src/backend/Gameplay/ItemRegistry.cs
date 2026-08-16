@@ -61,7 +61,9 @@ public enum ItemSlot
     /// <summary>Trinket slot — modifies secondary ability stats.</summary>
     Trinket,
     /// <summary>Boots slot — modifies movement speed and stamina regen.</summary>
-    Boots
+    Boots,
+    /// <summary>Permanent / non-consumable. Lives on the Key Items screen, never the backpack.</summary>
+    KeyItem
 }
 
 /// <summary>
@@ -252,7 +254,62 @@ public static class ItemRegistry
             Slot = ItemSlot.Boots,
             Stats = new ItemStatModifiers { BonusMoveSpeed = 0.7f, BonusStaminaRegen = 4f, BonusMaxStamina = 20f },
         },
+
+        // =====================================================================
+        // KEY ITEMS (permanent — Key Items screen, not backpack)
+        // =====================================================================
+
+        ["old_book_husk"] = new ItemDefinition
+        {
+            Id = "old_book_husk",
+            Name = "Old Book Husk",
+            Description = "A salt-stiff binding with no pages. Merek believes it remembers a way home.",
+            Rarity = ItemRarity.Rare,
+            Slot = ItemSlot.KeyItem,
+        },
+
+        ["necronomicon"] = new ItemDefinition
+        {
+            Id = "necronomicon",
+            Name = "Necronomicon",
+            Description = "Bound by Merek from the husk. Functions unlock as pages return. First: See Beyond.",
+            Rarity = ItemRarity.Epic,
+            Slot = ItemSlot.KeyItem,
+        },
+
+        ["necronomicon_pages"] = new ItemDefinition
+        {
+            Id = "necronomicon_pages",
+            Name = "Pages of the Necronomicon",
+            Description = "Shed by the God Serpent. Press Use to bind them — or they bind themselves when the book hungers.",
+            Rarity = ItemRarity.Epic,
+            Slot = ItemSlot.KeyItem,
+        },
+
+        ["obsidian_shovel"] = new ItemDefinition
+        {
+            Id = "obsidian_shovel",
+            Name = "Obsidian Shovel",
+            Description = "A Link-to-the-Past spade in Carcosa glass. Dig sand, ash, and loose earth. Most holes are empty.",
+            Rarity = ItemRarity.Epic,
+            Slot = ItemSlot.KeyItem,
+        },
     };
+
+    static ItemRegistry()
+    {
+        foreach (var art in DigSystem.Artifacts)
+        {
+            _items[art.Id] = new ItemDefinition
+            {
+                Id = art.Id,
+                Name = art.Name,
+                Description = $"{art.Flavor} — {art.Effect}",
+                Rarity = art.Secret ? ItemRarity.Epic : ItemRarity.Rare,
+                Slot = ItemSlot.KeyItem,
+            };
+        }
+    }
 
     // =========================================================================
     // PUBLIC API

@@ -241,7 +241,7 @@ export default function InventoryPanel({
         )}
 
         <div style={{ color: '#4a4030', fontSize: '0.6rem', marginTop: 8, textAlign: 'center' }}>
-          Click equippable items to wear them. Press I or ESC to close.
+          Click equippable items to wear them. Press I or ESC to close. K opens Key Items.
         </div>
       </div>
     </div>

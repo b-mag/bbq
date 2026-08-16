@@ -52,7 +52,7 @@ namespace Carcosa.Server.Gameplay;
 public sealed class PlayerSaveData
 {
     /// <summary>Save format version. Increment when adding breaking changes.</summary>
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 3;
 
     // --- Identity / first-run ---
     public string DisplayName { get; set; } = "";
@@ -104,6 +104,23 @@ public sealed class PlayerSaveData
     public int WorldWidth { get; set; }
     public bool WasInDungeon { get; set; }
 
+    // --- Key Items / quest / friends (local only — never P2P) ---
+    /// <summary>Permanent items (Necronomicon, shovel, dug artifacts). Not backpack.</summary>
+    public List<string> KeyItemIds { get; set; } = new();
+    /// <summary>Connected peers marked Friend. Future mesh-split prefers keeping these together.</summary>
+    public List<SavedFriend> Friends { get; set; } = new();
+    public int NecronomiconQuestStage { get; set; }
+    public List<string> DefeatedDungeonIds { get; set; } = new();
+    public List<string> NecronomiconFunctions { get; set; } = new();
+    public List<string> CollectedWorldObjectIds { get; set; } = new();
+    public List<string> DugSpotIds { get; set; } = new();
+    public string? SeeBeyondAreaId { get; set; }
+    public float SeeBeyondX { get; set; }
+    public float SeeBeyondY { get; set; }
+    public string? SeeBeyondLabel { get; set; }
+    public bool SeeBeyondActive { get; set; }
+    public int NecronomiconRank { get; set; }
+
     // --- Timestamps ---
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime LastSavedAt { get; set; } = DateTime.UtcNow;
@@ -127,7 +144,7 @@ public sealed class SaveManager
     // =========================================================================
 
     /// <summary>Current save format version.</summary>
-    private const byte CurrentVersion = 2;
+    private const byte CurrentVersion = 3;
 
     /// <summary>
     /// Hardcoded salt for PBKDF2 key derivation. Combined with peer ID to
@@ -406,6 +423,9 @@ public sealed class SaveManager
 [JsonSerializable(typeof(PlayerSaveData))]
 [JsonSerializable(typeof(SaveInventorySlot))]
 [JsonSerializable(typeof(List<SaveInventorySlot?>))]
+[JsonSerializable(typeof(SavedFriend))]
+[JsonSerializable(typeof(List<SavedFriend>))]
+[JsonSerializable(typeof(List<string>))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,

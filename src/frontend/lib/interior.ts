@@ -53,11 +53,13 @@ export function generateInterior(
   const wall = OwTileType.Wall;
   const floor = kind === 'hut' || kind === 'cave'
     ? OwTileType.Flesh
-    : kind === 'shop'
-      ? OwTileType.Palace
-      : kind === 'tower'
-        ? OwTileType.Cobblestone
-        : OwTileType.Floor;
+    : kind === 'ship'
+      ? OwTileType.Flesh
+      : kind === 'shop'
+        ? OwTileType.Palace
+        : kind === 'tower'
+          ? OwTileType.Cobblestone
+          : OwTileType.Floor;
 
   for (let y = 0; y < INTERIOR_H; y++) {
     for (let x = 0; x < INTERIOR_W; x++) {
@@ -82,6 +84,16 @@ export function generateInterior(
   if (kind === 'hut') {
     tiles[4 * INTERIOR_W + 4] = OwTileType.Flesh;
     tiles[5 * INTERIOR_W + 11] = OwTileType.Swamp;
+  }
+
+  if (kind === 'ship') {
+    for (let x = 1; x < INTERIOR_W - 1; x++) {
+      tiles[1 * INTERIOR_W + x] = OwTileType.DeepWater;
+      if (x !== doorX) tiles[(INTERIOR_H - 2) * INTERIOR_W + x] = OwTileType.ShallowWater;
+    }
+    tiles[4 * INTERIOR_W + 3] = OwTileType.Ruins;
+    tiles[5 * INTERIOR_W + 12] = OwTileType.Palace;
+    tiles[3 * INTERIOR_W + 8] = OwTileType.Ash;
   }
 
   const objects: OwWorldObjectData[] = [];
@@ -109,6 +121,7 @@ export function generateInterior(
     tower: 'The Dark Tower',
     shop: 'The Intact House',
     cave: 'A Hollow',
+    ship: 'The Dream Hull',
   };
 
   return {

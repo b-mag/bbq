@@ -115,6 +115,23 @@ export const NPC_DIALOGUE: Record<string, NpcDialogue> = {
       'If the pale oval turns toward you, bow. If it smiles, you imagined it.',
     ],
   },
+  npc_merek: {
+    name: 'Merek',
+    lines: [
+      'Easy. You washed up on this shore with your mind wind-wiped. Typical. We dragged you above the tide before the docks claimed you.',
+      'If you mean to go back wherever you came from, gather pages of the Necronomicon. The Wizard of Boz can read them. He can send you home. Or something that looks like home.',
+      'There are rumors — deep in the labyrinth of Dagon, the Drowned Docks — a God Serpent keeps a page. The Agwan will not thank you for walking their sacred waterways.',
+      'That hull behind me is older than the village. A dream-ship. When you are ready, I will have work for you inside it. Not yet. Listen first. Then bleed later.',
+    ],
+  },
+  npc_agwan: {
+    name: 'Agwan Warden',
+    lines: [
+      'Turn back. The labyrinth of Dagon is not for your kind.',
+      'Only Agwan may walk the sacred waterways. The fishermen carry tribute. You carry nothing the God Serpent wants — except your name.',
+      'Enter and the docks will remember you as meat that learned to knock.',
+    ],
+  },
 };
 
 export function dialogueFor(type: string): NpcDialogue | null {
@@ -132,11 +149,13 @@ export const ENTERABLE_BUILDINGS = new Set([
   'house',
   'dark_tower',
   'lake_shop',
+  'dream_ship',
 ]);
 
-export function buildingKind(type: string): 'house' | 'hut' | 'tower' | 'shop' | 'cave' {
+export function buildingKind(type: string): 'house' | 'hut' | 'tower' | 'shop' | 'cave' | 'ship' {
   if (type === 'lake_shop') return 'shop';
   if (type === 'dark_tower') return 'tower';
+  if (type === 'dream_ship') return 'ship';
   if (type === 'mud_hut' || type === 'giger_house') return 'hut';
   if (type.includes('cave')) return 'cave';
   return 'house';

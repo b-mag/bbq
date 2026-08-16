@@ -4,6 +4,10 @@
  *
  * Edit hexes here (or add a new palette) and the overworld picks them up
  * on the next chunk rebuild / page reload.
+ *
+ * Full art reference (named + sampled from every PNG):
+ *   src/frontend/public/assets/palettes.json
+ *   src/frontend/public/assets/catalog.json → palettes
  */
 
 export interface CarcosaPalette {
@@ -42,6 +46,16 @@ export const PALETTES: Record<string, CarcosaPalette> = {
     id: 'chartreuse',
     name: 'Sickly Chartreuse & Void',
     colors: ['#0A0A05', '#1A1A0A', '#3A3A18', '#6B6B28', '#A8A84A', '#D8D88A', '#2A2210', '#5C4A28', '#8B7A50'],
+  },
+  drowned_dock: {
+    id: 'drowned_dock',
+    name: 'Drowned Dock / Labyrinth of Dagon',
+    colors: ['#0A0D0B', '#1A1A1A', '#2E332A', '#3D3A30', '#8B4513', '#A0522D', '#B8860B', '#D2B48C', '#E8C8A0'],
+  },
+  agwan: {
+    id: 'agwan',
+    name: 'Agwan Flesh & Ichor',
+    colors: ['#0D0505', '#1A1208', '#3A2820', '#8B2A2A', '#A0522D', '#C45C4A', '#E8C8A0', '#E8D4B8', '#1A1A1A'],
   },
 };
 

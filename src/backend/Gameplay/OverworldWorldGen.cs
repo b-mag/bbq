@@ -432,11 +432,12 @@ internal static class OverworldWorldGen
         new() { Name = "The Intact House", X = X(0.32), Y = Y(0.42), Type = "shop" },
         new() { Name = "West Hamlet", X = X(0.18), Y = Y(0.86), Type = "village" },
         new() { Name = "The Twin Suns Road", X = X(0.50), Y = Y(0.30), Type = "road" },
+        new() { Name = "The Dream Hull", X = X(0.56), Y = Y(0.945), Type = "wreck" },
     ];
 
     private static List<BootstrapEntrance> Entrances() =>
     [
-        new() { Name = "The Drowned Dock", X = X(0.52), Y = Y(0.90), Scenario = "warehouse", DungeonWidth = 80, DungeonHeight = 60 },
+        new() { Name = "The Drowned Dock", X = X(0.52), Y = Y(0.90), Scenario = "drowned_dock", DungeonWidth = 80, DungeonHeight = 60 },
         new() { Name = "Temple of Hali", X = X(0.78), Y = Y(0.34), Scenario = "temple", DungeonWidth = 100, DungeonHeight = 100 },
         new() { Name = "Mountain Cave", X = X(0.50), Y = Y(0.16), Scenario = "mountain_cave", DungeonWidth = 60, DungeonHeight = 50 },
         new() { Name = "Sunken Cyclopean Quay", X = X(0.70), Y = Y(0.94), Scenario = "warehouse", DungeonWidth = 90, DungeonHeight = 70 },
@@ -508,6 +509,11 @@ internal static class OverworldWorldGen
         Add("npc_priest", X(0.82) + 0.5f, Y(0.26) + 0.5f, false, 0);
         Add("npc_hermit", X(0.50) + 0.5f, Y(0.10) + 0.5f, false, 0);
         Add("npc_ember", X(0.14) + 0.5f, Y(0.22) + 0.5f, false, 0);
+
+        Add("dream_ship", X(0.56) + 0.5f, Y(0.945) + 0.5f, true, 3.2f);
+        Add("npc_merek", X(0.54) + 0.5f, Y(0.94) + 0.5f, false, 0);
+        Add("npc_agwan", X(0.505) + 0.5f, Y(0.888) + 0.5f, false, 0);
+        Add("npc_agwan", X(0.535) + 0.5f, Y(0.888) + 0.5f, false, 0);
 
         Add("npc_fisher", X(0.48) + 0.5f, Y(0.90) + 0.5f, false, 0);
         Add("npc_fisher", X(0.53) + 0.5f, Y(0.91) + 0.5f, false, 0);

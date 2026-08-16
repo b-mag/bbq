@@ -227,15 +227,48 @@ export default function Home() {
   };
 
   // Enter dungeon from overworld
-  const handleEnterDungeon = (data: { hostAddress: string; seed: number; scenario: string }) => {
+  const handleEnterDungeon = (data: {
+    hostAddress: string;
+    seed: number;
+    scenario: string;
+    map?: { width: number; height: number; seed: number; tilesBase64: string };
+  }) => {
     setDungeonInfo(data);
+    if (data.map?.tilesBase64) {
+      setGameMap(decodeMap(data.map));
+    }
     setAppState('dungeon');
-    // Connect to dungeon host
-    setTimeout(() => ws.connect(), 100);
   };
+
+  // Connect after dungeon state commits so the message handler is subscribed.
+  useEffect(() => {
+    if (appState !== 'dungeon') return;
+    if (ws.status === 'disconnected' || ws.status === 'error') {
+      ws.connect();
+    }
+  }, [appState, ws.status, ws.connect]);
+
+  // Skip lobby: class + ready + start once the socket is up (server also auto-starts).
+  useEffect(() => {
+    if (appState !== 'dungeon' || ws.status !== 'connected') return;
+    const sendAction = (action: 'select_class' | 'set_ready' | 'start_game', value?: string) => {
+      ws.send({
+        type: MessageTypes.SessionAction,
+        sessionAction: { action, value },
+      });
+    };
+    sendAction('select_class', 'detective');
+    sendAction('set_ready', 'true');
+    sendAction('start_game');
+  }, [appState, ws.status, ws.send]);
 
   // Return to overworld from dungeon
   const handleReturnToOverworld = () => {
+    fetch('/api/gameplay/dungeon/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ victory: false }),
+    }).catch(() => { /* ignore */ });
     ws.disconnect();
     setAppState('overworld');
     setDungeonInfo(null);

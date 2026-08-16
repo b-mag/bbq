@@ -41,7 +41,12 @@ interface OverworldViewProps {
   playerName: string;
   playerFigure?: string;
   onDisconnect: () => void;
-  onEnterDungeon?: (data: { hostAddress: string; seed: number; scenario: string }) => void;
+  onEnterDungeon?: (data: {
+    hostAddress: string;
+    seed: number;
+    scenario: string;
+    map?: { width: number; height: number; seed: number; tilesBase64: string };
+  }) => void;
 }
 
 interface PartySnapshot {
@@ -149,7 +154,12 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
     pushPanel('flame-offering');
   }, [showFlameOffering]);
 
-  const transitionToDungeon = useCallback((seed: number, scenario: string, instanceId?: string | null) => {
+  const transitionToDungeon = useCallback((
+    seed: number,
+    scenario: string,
+    instanceId?: string | null,
+    map?: { width: number; height: number; seed: number; tilesBase64: string } | null,
+  ) => {
     if (!onEnterDungeon) return;
     const id = instanceId || `${seed}:${scenario}`;
     lastDungeonInstanceRef.current = id;
@@ -158,6 +168,7 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
       hostAddress: window.location.origin,
       seed,
       scenario: scenario || 'mountain_cave',
+      map: map ?? undefined,
     });
   }, [onEnterDungeon]);
 
@@ -184,7 +195,8 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         transitionToDungeon(
           instance?.seed ?? 0,
           instance?.scenario || 'mountain_cave',
-          instance?.instanceId
+          instance?.instanceId,
+          data.map ?? null,
         );
       } else {
         enteringDungeonRef.current = false;
@@ -514,7 +526,12 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
           const id = data.instanceId || `${data.seed}:${data.scenario}`;
           if (id === lastDungeonInstanceRef.current) return;
           enteringDungeonRef.current = true;
-          transitionToDungeon(data.seed ?? 0, data.scenario || 'mountain_cave', data.instanceId);
+          let map = null;
+          try {
+            const mapRes = await fetch('/api/gameplay/dungeon/map');
+            if (mapRes.ok) map = await mapRes.json();
+          } catch { /* ignore */ }
+          transitionToDungeon(data.seed ?? 0, data.scenario || 'mountain_cave', data.instanceId, map);
         }
       } catch { /* ignore */ }
     };

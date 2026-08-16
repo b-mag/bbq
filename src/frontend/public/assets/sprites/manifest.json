@@ -187,6 +187,32 @@
     "color": "#6a5030",
     "collision": false
   },
+  "dream_ship": {
+    "width": 192,
+    "height": 112,
+    "frames": 1,
+    "color": "#8B4513",
+    "collision": true,
+    "collisionRadius": 3.2
+  },
+  "npc_merek": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "directions": 4,
+    "strideTiles": 0.85,
+    "color": "#E8D4B8",
+    "file": "npc_merek.png"
+  },
+  "npc_agwan": {
+    "width": 32,
+    "height": 32,
+    "frames": 4,
+    "directions": 4,
+    "strideTiles": 0.8,
+    "color": "#C45C4A",
+    "file": "npc_agwan.png"
+  },
   "dock_post": {
     "width": 24,
     "height": 48,

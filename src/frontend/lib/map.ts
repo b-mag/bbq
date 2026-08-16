@@ -41,12 +41,12 @@ export enum TileType {
  * Color palette for each tile type (1920s muted aesthetic).
  */
 export const TILE_COLORS: Record<TileType, string> = {
-  [TileType.Floor]: '#3d3225',     // Dark wood floor
-  [TileType.Wall]: '#1a1510',      // Very dark wall
-  [TileType.Door]: '#5c4a2e',      // Lighter wood for doors
-  [TileType.Water]: '#1a3040',     // Dark ocean blue
-  [TileType.Cobblestone]: '#4a4438', // Gray-brown cobblestone
-  [TileType.Sand]: '#5c5040',      // Sandy beige
+  [TileType.Floor]: '#3D3A30',      // Drowned Dock silt / ribbed stone
+  [TileType.Wall]: '#0A0D0B',       // Near-black biomechanical wall
+  [TileType.Door]: '#B8860B',       // Tarnished gold rift
+  [TileType.Water]: '#1A1A1A',      // Black water / canal
+  [TileType.Cobblestone]: '#8B4513', // Rust dock planks
+  [TileType.Sand]: '#A0522D',       // Dried silt banks
 };
 
 /**

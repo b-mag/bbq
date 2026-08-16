@@ -240,6 +240,7 @@ if (dungeonSeed.HasValue && dungeonScenario != null)
     {
         MapScenario.PallidSanctum => MapGenerator.GenerateTemple(100, 100, mapSeed),
         MapScenario.MountainCave => MapGenerator.GenerateCave(60, 50, mapSeed),
+        MapScenario.DrownedDock => MapGenerator.GenerateDrownedDock(80, 60, mapSeed),
         _ => MapGenerator.Generate(80, 60, mapSeed),
     };
     Console.WriteLine($"[Dungeon Instance] Map generated: {gameLoop.State.Map.Width}x{gameLoop.State.Map.Height}");
@@ -421,9 +422,21 @@ connectionManager.OnMessageReceived += async (senderId, message) =>
 
 // WHY: Player connect/disconnect events go through SessionManager so it can
 // track lobby state, assign host, and clean up on disconnect.
+var dungeonManager = app.Services.GetRequiredService<DungeonInstanceManager>();
 connectionManager.OnPlayerConnected += (playerId, playerName) =>
 {
     sessionManager.AddPlayer(playerId, playerName);
+    var snap = dungeonManager.GetActiveInstance();
+    var dungeonMap = dungeonManager.ActiveMap;
+    if (snap == null || dungeonMap == null) return;
+    var scenario = (snap.Scenario ?? "").Trim().ToLowerInvariant() switch
+    {
+        "pallid_sanctum" or "temple" => MapScenario.PallidSanctum,
+        "mountain_cave" or "cave" => MapScenario.MountainCave,
+        "hollow" => MapScenario.Hollow,
+        _ => MapScenario.DrownedDock,
+    };
+    sessionManager.TryJoinActiveDungeon(playerId, dungeonMap, scenario);
 };
 
 connectionManager.OnPlayerDisconnected += (playerId) =>
@@ -1053,16 +1066,29 @@ app.MapPost("/api/gameplay/dungeon/enter", async (DungeonEnterRequest request, D
     var scenario = string.IsNullOrWhiteSpace(request.Scenario) ? "mountain_cave" : request.Scenario;
     var started = await dungeons.EnterDungeonAsync(scenario, request.EntranceX, request.EntranceY);
     var snap = dungeons.GetActiveInstance();
+    var map = dungeons.ActiveMap;
+    DungeonMapResponse? mapRes = map == null
+        ? null
+        : new DungeonMapResponse(map.Width, map.Height, map.Seed, map.ToBase64());
     if (snap == null)
-        return Results.Ok(new DungeonEnterResponse(started, null));
+        return Results.Ok(new DungeonEnterResponse(started, null, mapRes));
     return Results.Ok(new DungeonEnterResponse(started, new DungeonInstanceResponse(
         true, snap.InstanceId, snap.Seed, snap.Scenario, snap.HostPeerId,
-        snap.AvgLevel, snap.Phase, snap.IsLocalHost)));
+        snap.AvgLevel, snap.Phase, snap.IsLocalHost), mapRes));
 });
 
-app.MapPost("/api/gameplay/dungeon/complete", async (DungeonCompleteRequest request, DungeonInstanceManager dungeons) =>
+app.MapGet("/api/gameplay/dungeon/map", (DungeonInstanceManager dungeons) =>
+{
+    var map = dungeons.ActiveMap;
+    if (map == null)
+        return Results.NotFound();
+    return Results.Ok(new DungeonMapResponse(map.Width, map.Height, map.Seed, map.ToBase64()));
+});
+
+app.MapPost("/api/gameplay/dungeon/complete", async (DungeonCompleteRequest request, DungeonInstanceManager dungeons, SessionManager sessions) =>
 {
     await dungeons.CompleteDungeonAsync(request.Victory);
+    sessions.ResetToLobby();
     return Results.Ok(new CombatActionResponse(true, null));
 });
 
@@ -1408,7 +1434,8 @@ internal record DungeonInstanceResponse(
     int AvgLevel,
     string? Phase,
     bool IsLocalHost);
-internal record DungeonEnterResponse(bool Started, DungeonInstanceResponse? Instance);
+internal record DungeonMapResponse(int Width, int Height, int Seed, string TilesBase64);
+internal record DungeonEnterResponse(bool Started, DungeonInstanceResponse? Instance, DungeonMapResponse? Map);
 
 /// <summary>
 /// Source-generated JSON context for HTTP API response types.
@@ -1462,6 +1489,7 @@ internal record DungeonEnterResponse(bool Started, DungeonInstanceResponse? Inst
 [JsonSerializable(typeof(DungeonCompleteRequest))]
 [JsonSerializable(typeof(DungeonInstanceResponse))]
 [JsonSerializable(typeof(DungeonEnterResponse))]
+[JsonSerializable(typeof(DungeonMapResponse))]
 [JsonSerializable(typeof(BootstrapResponse))]
 [JsonSerializable(typeof(SettingsResponse))]
 [JsonSerializable(typeof(SettingsUpdateRequest))]

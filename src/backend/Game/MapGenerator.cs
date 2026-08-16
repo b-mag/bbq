@@ -264,6 +264,124 @@ public static class MapGenerator
         };
     }
 
+    /// <summary>
+    /// The Drowned Dock — labyrinthine cave with fishermen's waterways.
+    /// Giger / Dagon layout: cavern floors, water channels, silt banks, dock planks.
+    /// </summary>
+    public static TileMap GenerateDrownedDock(int width, int height, int seed)
+    {
+        if (width < 24) width = 24;
+        if (height < 20) height = 20;
+
+        var cave = GenerateCave(width, height, seed);
+        var tiles = cave.Tiles;
+        var rng = new Random(unchecked(seed * 397) ^ 0xD06A);
+
+        var spawn = cave.SpawnPoints.FirstOrDefault(s => s.Type == SpawnPointType.Player);
+        var spawnX = spawn?.X ?? width / 2;
+        var spawnY = spawn?.Y ?? height - 4;
+
+        // Keep a dry landing around the south entrance.
+        for (int y = height - 8; y < height - 1; y++)
+        {
+            for (int x = spawnX - 2; x <= spawnX + 2; x++)
+            {
+                if (x > 0 && x < width - 1 && y > 0 && y < height - 1
+                    && tiles[y * width + x] == (byte)TileType.Wall)
+                    tiles[y * width + x] = (byte)TileType.Floor;
+            }
+        }
+
+        // Waterways through wide caverns — only flood cells with many floor neighbors
+        // so a walkable bank always remains.
+        for (int y = 2; y < height - 2; y++)
+        {
+            for (int x = 2; x < width - 2; x++)
+            {
+                if (tiles[y * width + x] != (byte)TileType.Floor) continue;
+                if (Math.Abs(x - spawnX) + Math.Abs(y - spawnY) < 6) continue;
+                if (CountFloorNeighbors(tiles, width, height, x, y) < 6) continue;
+                if (rng.Next(100) < 18)
+                    tiles[y * width + x] = (byte)TileType.Water;
+            }
+        }
+
+        // Drunkard channels for longer canals the fishermen would use.
+        var channels = Math.Max(3, (width * height) / 1100);
+        for (int i = 0; i < channels; i++)
+        {
+            var x = rng.Next(4, width - 4);
+            var y = rng.Next(4, height - 8);
+            var steps = Math.Max(18, width / 2);
+            for (int s = 0; s < steps; s++)
+            {
+                if (x < 2 || y < 2 || x >= width - 2 || y >= height - 2) break;
+                if (Math.Abs(x - spawnX) + Math.Abs(y - spawnY) < 5) break;
+                if (tiles[y * width + x] == (byte)TileType.Floor
+                    && CountFloorNeighbors(tiles, width, height, x, y) >= 4)
+                    tiles[y * width + x] = (byte)TileType.Water;
+
+                var dir = rng.Next(4);
+                x += dir == 2 ? -1 : dir == 3 ? 1 : 0;
+                y += dir == 0 ? -1 : dir == 1 ? 1 : 0;
+            }
+        }
+
+        // Silt banks and dock planks along water.
+        for (int y = 1; y < height - 1; y++)
+        {
+            for (int x = 1; x < width - 1; x++)
+            {
+                if (tiles[y * width + x] != (byte)TileType.Floor) continue;
+                var water = 0;
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        if (dx == 0 && dy == 0) continue;
+                        if (tiles[(y + dy) * width + (x + dx)] == (byte)TileType.Water)
+                            water++;
+                    }
+                }
+                if (water == 0) continue;
+                if (water >= 3 && rng.Next(3) != 0)
+                    tiles[y * width + x] = (byte)TileType.Sand;
+                else if (rng.Next(4) == 0)
+                    tiles[y * width + x] = (byte)TileType.Cobblestone;
+            }
+        }
+
+        // A few ritual chambers: cobblestone floors in larger rooms.
+        foreach (var room in cave.Rooms)
+        {
+            if (room.Width < 6 || room.Height < 6) continue;
+            if (rng.Next(3) != 0) continue;
+            for (int y = room.Y + 1; y < room.Y + room.Height - 1; y++)
+            {
+                for (int x = room.X + 1; x < room.X + room.Width - 1; x++)
+                {
+                    if ((uint)x >= (uint)width || (uint)y >= (uint)height) continue;
+                    if (tiles[y * width + x] == (byte)TileType.Floor)
+                        tiles[y * width + x] = (byte)TileType.Cobblestone;
+                }
+            }
+        }
+
+        EnforceCaveBorder(tiles, width, height);
+        if (tiles[spawnY * width + spawnX] is (byte)TileType.Wall or (byte)TileType.Water)
+            tiles[spawnY * width + spawnX] = (byte)TileType.Floor;
+
+        return new TileMap
+        {
+            Width = width,
+            Height = height,
+            Tiles = tiles,
+            Seed = seed,
+            Rooms = cave.Rooms,
+            SpawnPoints = cave.SpawnPoints
+        };
+    }
+
     private static void DrunkardWalk(byte[] tiles, int width, int height, Random rng,
         int startX, int startY, int steps, int radius)
     {

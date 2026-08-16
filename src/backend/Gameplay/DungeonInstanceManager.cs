@@ -77,7 +77,8 @@ public sealed class DungeonInstanceManager
     {
         lock (_lock)
         {
-            if (_active != null) return false;
+            // Rejoin an instance that is already live (refresh / Return-then-reenter).
+            if (_active != null) return true;
         }
 
         var members = GetPartyMemberIds();
@@ -203,6 +204,7 @@ public sealed class DungeonInstanceManager
         {
             MapScenario.MountainCave => MapGenerator.GenerateCave(CaveWidth, CaveHeight, seed),
             MapScenario.PallidSanctum => MapGenerator.GenerateTemple(100, 100, seed),
+            MapScenario.DrownedDock => MapGenerator.GenerateDrownedDock(80, 60, seed),
             _ => MapGenerator.Generate(80, 60, seed),
         };
     }

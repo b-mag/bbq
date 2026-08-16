@@ -1,0 +1,628 @@
+{
+  "version": 1,
+  "updated": "2026-08-15",
+  "purpose": "Art reference. Named palettes are the ones to paint with. sampled[] is what is actually in each PNG right now.",
+  "named": {
+    "gold": {
+      "name": "Carcosa Gold & Black Ichor",
+      "use": "palaces, brass, royal stone",
+      "colors": [
+        "#1A1208",
+        "#2E2214",
+        "#4A3A22",
+        "#8B6B2E",
+        "#C9A84C",
+        "#E8D48B",
+        "#3D1F0F",
+        "#6B3A28",
+        "#A67C52"
+      ]
+    },
+    "flesh": {
+      "name": "Giger Biomechanical Flesh",
+      "use": "creatures, organic walls, wet interiors",
+      "colors": [
+        "#0D0505",
+        "#1F0A0A",
+        "#4A1515",
+        "#8B2A2A",
+        "#C45C4A",
+        "#E8C8A0",
+        "#A89070",
+        "#5C3A2A",
+        "#3A2820"
+      ]
+    },
+    "purple": {
+      "name": "Purple Dream / Non-Euclidean Chamber",
+      "use": "mist, peaks sky, alien rooms",
+      "colors": [
+        "#0F0518",
+        "#1E0F2E",
+        "#3A1F5C",
+        "#6B3A9E",
+        "#9B6BC9",
+        "#C9A8E0",
+        "#2A4A3A",
+        "#5C7A4A",
+        "#8BA87A"
+      ]
+    },
+    "teal": {
+      "name": "Abyssal Teal & Black Water",
+      "use": "lakes, sand, docks",
+      "colors": [
+        "#020810",
+        "#0A1A22",
+        "#1A3A4A",
+        "#2A6A7A",
+        "#4A9AAB",
+        "#8AC8D8",
+        "#1A2A28",
+        "#3A4A42",
+        "#6A8A7A"
+      ]
+    },
+    "crimson": {
+      "name": "Scorched Crimson Wastes",
+      "use": "desert, ash, heat",
+      "colors": [
+        "#0A0404",
+        "#1F0A0A",
+        "#4A1510",
+        "#8B2A18",
+        "#C45A30",
+        "#E8A060",
+        "#3A2210",
+        "#6B4A28",
+        "#A87A50"
+      ]
+    },
+    "chartreuse": {
+      "name": "Sickly Chartreuse & Void",
+      "use": "forest, swamp, grass",
+      "colors": [
+        "#0A0A05",
+        "#1A1A0A",
+        "#3A3A18",
+        "#6B6B28",
+        "#A8A84A",
+        "#D8D88A",
+        "#2A2210",
+        "#5C4A28",
+        "#8B7A50"
+      ]
+    },
+    "drowned_dock": {
+      "name": "Drowned Dock / Labyrinth of Dagon",
+      "use": "dungeon tiles, dream-ship, canal water",
+      "colors": [
+        "#0A0D0B",
+        "#1A1A1A",
+        "#2E332A",
+        "#3D3A30",
+        "#8B4513",
+        "#A0522D",
+        "#B8860B",
+        "#D2B48C",
+        "#E8C8A0"
+      ]
+    },
+    "agwan": {
+      "name": "Agwan Flesh & Ichor",
+      "use": "Merek, Agwan wardens",
+      "colors": [
+        "#0D0505",
+        "#1A1208",
+        "#3A2820",
+        "#8B2A2A",
+        "#A0522D",
+        "#C45C4A",
+        "#E8C8A0",
+        "#E8D4B8",
+        "#1A1A1A"
+      ]
+    }
+  },
+  "tilesets": [
+    {
+      "file": "tilesets/carcosa_realms.png",
+      "sampled": [
+        "#000000",
+        "#101010",
+        "#202020",
+        "#201010",
+        "#302020",
+        "#403030",
+        "#303030",
+        "#303020"
+      ]
+    },
+    {
+      "file": "tilesets/drowned_docks.png",
+      "sampled": [
+        "#000000",
+        "#101010",
+        "#A05020",
+        "#804010",
+        "#303020",
+        "#303030",
+        "#203020",
+        "#504020"
+      ]
+    },
+    {
+      "file": "tilesets/ruined_carcosa.png",
+      "sampled": [
+        "#000000",
+        "#101010",
+        "#202010",
+        "#101000",
+        "#201010",
+        "#302020",
+        "#202020",
+        "#303020"
+      ]
+    },
+    {
+      "file": "tilesets/shore_of_hali.png",
+      "sampled": [
+        "#000000",
+        "#103030",
+        "#001010",
+        "#000010",
+        "#001020",
+        "#002020",
+        "#101010",
+        "#002030"
+      ]
+    },
+    {
+      "file": "tilesets/the_waste.png",
+      "sampled": [
+        "#000000",
+        "#101000",
+        "#101010",
+        "#202010",
+        "#201010",
+        "#100000",
+        "#302020",
+        "#303020"
+      ]
+    },
+    {
+      "file": "tilesets/yellow_palaces.png",
+      "sampled": [
+        "#000000",
+        "#100000",
+        "#201000",
+        "#101000",
+        "#403010",
+        "#200000",
+        "#302000",
+        "#302010"
+      ]
+    }
+  ],
+  "sprites": [
+    {
+      "file": "sprites/bone_spire.png",
+      "sampled": [
+        "#B0A090",
+        "#505040",
+        "#707060",
+        "#706050",
+        "#504040",
+        "#A0A090",
+        "#706060",
+        "#605040"
+      ]
+    },
+    {
+      "file": "sprites/boss_warehouse.png",
+      "sampled": [
+        "#000000",
+        "#100000",
+        "#201010",
+        "#302010",
+        "#301010",
+        "#200000",
+        "#101010",
+        "#302020"
+      ]
+    },
+    {
+      "file": "sprites/cultist_acolyte.png",
+      "sampled": [
+        "#000000",
+        "#400000",
+        "#300000",
+        "#100000",
+        "#200000",
+        "#500000",
+        "#600000",
+        "#806040"
+      ]
+    },
+    {
+      "file": "sprites/cultist_chanter.png",
+      "sampled": [
+        "#000000",
+        "#301020",
+        "#100000",
+        "#201010",
+        "#401020",
+        "#200010",
+        "#401030",
+        "#502030"
+      ]
+    },
+    {
+      "file": "sprites/cultist_dagger.png",
+      "sampled": [
+        "#000000",
+        "#100000",
+        "#101010",
+        "#202020",
+        "#101000",
+        "#201010",
+        "#403020",
+        "#202030"
+      ]
+    },
+    {
+      "file": "sprites/cultist_lightning.png",
+      "sampled": [
+        "#000000",
+        "#F0F0F0",
+        "#001030",
+        "#000010",
+        "#002040",
+        "#001020",
+        "#001040",
+        "#1070B0"
+      ]
+    },
+    {
+      "file": "sprites/cultist_shotgun.png",
+      "sampled": [
+        "#100000",
+        "#201000",
+        "#301000",
+        "#302000",
+        "#000000",
+        "#503010",
+        "#402010",
+        "#101000"
+      ]
+    },
+    {
+      "file": "sprites/cultist_torch.png",
+      "sampled": [
+        "#000000",
+        "#100000",
+        "#200000",
+        "#300000",
+        "#600000",
+        "#400000",
+        "#801000",
+        "#500000"
+      ]
+    },
+    {
+      "file": "sprites/dark_tower.png",
+      "sampled": [
+        "#201030",
+        "#201020",
+        "#101020",
+        "#301030",
+        "#505040",
+        "#000000",
+        "#202030",
+        "#504040"
+      ]
+    },
+    {
+      "file": "sprites/dock_post.png",
+      "sampled": [
+        "#403020",
+        "#504030",
+        "#504020",
+        "#604030",
+        "#201010",
+        "#202010",
+        "#201000"
+      ]
+    },
+    {
+      "file": "sprites/dream_ship.png",
+      "sampled": [
+        "#000000",
+        "#302020",
+        "#201010",
+        "#100000",
+        "#101010",
+        "#504030",
+        "#403030",
+        "#403020"
+      ]
+    },
+    {
+      "file": "sprites/dungeon_entrance.png",
+      "sampled": [
+        "#100000",
+        "#000000",
+        "#200000",
+        "#201000",
+        "#300000",
+        "#704010",
+        "#500000",
+        "#503010"
+      ]
+    },
+    {
+      "file": "sprites/fishing_boat.png",
+      "sampled": [
+        "#000000",
+        "#101000",
+        "#100000",
+        "#302010",
+        "#201000",
+        "#403020",
+        "#403010",
+        "#202010"
+      ]
+    },
+    {
+      "file": "sprites/giger_house.png",
+      "sampled": [
+        "#502020",
+        "#301010",
+        "#402020",
+        "#301020",
+        "#502030",
+        "#503020",
+        "#000000",
+        "#707060"
+      ]
+    },
+    {
+      "file": "sprites/gronk.png",
+      "sampled": [
+        "#201000",
+        "#100000",
+        "#301000",
+        "#402010",
+        "#B08060",
+        "#C09070",
+        "#200000",
+        "#A07050"
+      ]
+    },
+    {
+      "file": "sprites/house.png",
+      "sampled": [
+        "#000000",
+        "#100000",
+        "#201010",
+        "#101000",
+        "#200000",
+        "#302010",
+        "#301010",
+        "#201000"
+      ]
+    },
+    {
+      "file": "sprites/mud_hut.png",
+      "sampled": [
+        "#403020",
+        "#302010",
+        "#201010",
+        "#402020",
+        "#000000",
+        "#402010",
+        "#706050",
+        "#503020"
+      ]
+    },
+    {
+      "file": "sprites/npc_agwan.png",
+      "sampled": [
+        "#000000",
+        "#100000",
+        "#400000",
+        "#200000",
+        "#F0E0B0",
+        "#300000",
+        "#600000",
+        "#500000"
+      ]
+    },
+    {
+      "file": "sprites/npc_merek.png",
+      "sampled": [
+        "#101000",
+        "#403010",
+        "#302010",
+        "#705030",
+        "#705020",
+        "#303020",
+        "#F0E0C0",
+        "#202010"
+      ]
+    },
+    {
+      "file": "sprites/organic_house.png",
+      "sampled": [
+        "#403020",
+        "#302010",
+        "#201010",
+        "#402020",
+        "#402010",
+        "#000000",
+        "#706050",
+        "#707060"
+      ]
+    },
+    {
+      "file": "sprites/player_a.png",
+      "sampled": [
+        "#000000",
+        "#201010",
+        "#101010",
+        "#E0D0C0",
+        "#202020",
+        "#100000",
+        "#604020",
+        "#F0F0B0"
+      ]
+    },
+    {
+      "file": "sprites/player_b.png",
+      "sampled": [
+        "#000000",
+        "#E0D0C0",
+        "#100000",
+        "#201010",
+        "#F0F0B0",
+        "#101000",
+        "#201000",
+        "#302010"
+      ]
+    },
+    {
+      "file": "sprites/player_c.png",
+      "sampled": [
+        "#000000",
+        "#100000",
+        "#301000",
+        "#201000",
+        "#E0D0C0",
+        "#402010",
+        "#101010",
+        "#603010"
+      ]
+    },
+    {
+      "file": "sprites/ruined_pillar.png",
+      "sampled": [
+        "#000000",
+        "#100000",
+        "#200000",
+        "#403020",
+        "#302010",
+        "#201010",
+        "#101000",
+        "#402010"
+      ]
+    },
+    {
+      "file": "sprites/satyr_horn.png",
+      "sampled": [
+        "#000000",
+        "#202010",
+        "#100000",
+        "#101000",
+        "#303020",
+        "#503000",
+        "#707050",
+        "#404030"
+      ]
+    },
+    {
+      "file": "sprites/satyr_mask.png",
+      "sampled": [
+        "#101000",
+        "#000000",
+        "#202010",
+        "#504030",
+        "#403020",
+        "#101010",
+        "#403010",
+        "#100000"
+      ]
+    },
+    {
+      "file": "sprites/signpost.png",
+      "sampled": [
+        "#504020",
+        "#101000",
+        "#302010",
+        "#604020",
+        "#403010",
+        "#001000",
+        "#202010",
+        "#605030"
+      ]
+    },
+    {
+      "file": "sprites/tree.png",
+      "sampled": [
+        "#201010",
+        "#101010",
+        "#402020",
+        "#000000",
+        "#301020",
+        "#502030",
+        "#201020",
+        "#302020"
+      ]
+    },
+    {
+      "file": "sprites/village_net.png",
+      "sampled": [
+        "#B0A090",
+        "#A09080",
+        "#909070",
+        "#A0A090",
+        "#909080",
+        "#B0B090"
+      ]
+    },
+    {
+      "file": "sprites/villager_ash.png",
+      "sampled": [
+        "#000000",
+        "#101010",
+        "#101000",
+        "#202020",
+        "#302020",
+        "#303020",
+        "#404040",
+        "#403030"
+      ]
+    },
+    {
+      "file": "sprites/villager_dock.png",
+      "sampled": [
+        "#000000",
+        "#101000",
+        "#201000",
+        "#100000",
+        "#302010",
+        "#101010",
+        "#202020",
+        "#303030"
+      ]
+    },
+    {
+      "file": "sprites/wreck_boat.png",
+      "sampled": [
+        "#403020",
+        "#706040",
+        "#402010",
+        "#101000",
+        "#201010",
+        "#705040",
+        "#504030",
+        "#504020"
+      ]
+    }
+  ],
+  "howToUse": [
+    "Pick a named palette when making new art so biomes stay consistent.",
+    "drowned_dock = Labyrinth of Dagon dungeon + dream-ship.",
+    "agwan = Merek and entrance wardens (bone/charcoal + rust).",
+    "Re-run this script after packing new PNGs: python dev_scripts/extract-palettes.py"
+  ]
+}

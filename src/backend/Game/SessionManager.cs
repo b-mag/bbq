@@ -180,37 +180,47 @@ public sealed class SessionManager
             State = SessionState.Playing;
             Console.WriteLine($"[Session] Game starting with {readyPlayers.Count} players!");
 
-            // Generate map based on selected scenario
             var seed = Random.Shared.Next();
-            _gameLoop.State.Scenario = SelectedScenario;
-            _gameLoop.State.Map = SelectedScenario switch
+            var map = SelectedScenario switch
             {
                 MapScenario.PallidSanctum => MapGenerator.GenerateTemple(100, 100, seed),
                 MapScenario.MountainCave => MapGenerator.GenerateCave(60, 50, seed),
-                _ => MapGenerator.Generate(80, 60, seed) // Warehouse (default)
+                MapScenario.DrownedDock => MapGenerator.GenerateDrownedDock(80, 60, seed),
+                _ => MapGenerator.Generate(80, 60, seed)
             };
-            _gameLoop.State.Phase = GamePhase.Playing;
-            Console.WriteLine($"[Map] Generated {SelectedScenario} map with seed {seed}");
+            StartWithMap(map);
+            return true;
+        }
+    }
 
-            // Send map to all players
-            var mapMessage = new GameMessage
+    /// <summary>
+    /// Overworld dungeon enter: skip lobby and join the already-generated instance.
+    /// First connector starts the session; later connectors spawn into the live map.
+    /// </summary>
+    public void TryJoinActiveDungeon(string playerId, TileMap map, MapScenario scenario)
+    {
+        lock (_lock)
+        {
+            if (!_players.TryGetValue(playerId, out var player)) return;
+
+            if (player.SelectedClass == null)
+                player.SelectedClass = "detective";
+            player.IsReady = true;
+            SelectedScenario = scenario;
+
+            if (State == SessionState.Lobby)
             {
-                Type = MessageTypes.MapData,
-                MapData = new MapDataPayload
-                {
-                    Width = _gameLoop.State.Map.Width,
-                    Height = _gameLoop.State.Map.Height,
-                    Seed = _gameLoop.State.Map.Seed,
-                    TilesBase64 = _gameLoop.State.Map.ToBase64()
-                }
-            };
-            _ = _connectionManager.BroadcastAsync(mapMessage);
+                StartWithMap(map);
+                return;
+            }
 
-            // Spawn player entities
-            foreach (var player in _players.Values)
+            if (State != SessionState.Playing || _gameLoop.State.Map == null)
+                return;
+
+            SendMapToPlayer(playerId, _gameLoop.State.Map);
+            var entityId = $"player_{playerId}";
+            if (!_gameLoop.State.Entities.ContainsKey(entityId))
             {
-                if (!player.IsReady) continue;
-
                 var (spawnX, spawnY) = _gameLoop.State.Map.FindPlayerSpawn(Random.Shared);
                 _gameLoop.AddPlayer(
                     player.PlayerId,
@@ -220,13 +230,56 @@ public sealed class SessionManager
                     spawnY);
             }
 
-            // Start wave system
-            _gameLoop.Waves.StartWaves(_gameLoop.State);
-
             BroadcastSessionInfo();
-            return true;
         }
     }
+
+    private void StartWithMap(TileMap map)
+    {
+        State = SessionState.Playing;
+        _gameLoop.State.Scenario = SelectedScenario;
+        _gameLoop.State.Map = map;
+        _gameLoop.State.Phase = GamePhase.Playing;
+        Console.WriteLine($"[Map] {SelectedScenario} {map.Width}x{map.Height} seed={map.Seed}");
+
+        _ = _connectionManager.BroadcastAsync(new GameMessage
+        {
+            Type = MessageTypes.MapData,
+            MapData = ToMapPayload(map)
+        });
+
+        foreach (var player in _players.Values)
+        {
+            if (!player.IsReady) continue;
+            var (spawnX, spawnY) = map.FindPlayerSpawn(Random.Shared);
+            _gameLoop.AddPlayer(
+                player.PlayerId,
+                player.PlayerName,
+                player.SelectedClass ?? "detective",
+                spawnX,
+                spawnY);
+        }
+
+        _gameLoop.Waves.StartWaves(_gameLoop.State);
+        BroadcastSessionInfo();
+    }
+
+    private void SendMapToPlayer(string playerId, TileMap map)
+    {
+        _ = _connectionManager.SendToAsync(playerId, new GameMessage
+        {
+            Type = MessageTypes.MapData,
+            MapData = ToMapPayload(map)
+        });
+    }
+
+    private static MapDataPayload ToMapPayload(TileMap map) => new()
+    {
+        Width = map.Width,
+        Height = map.Height,
+        Seed = map.Seed,
+        TilesBase64 = map.ToBase64()
+    };
 
     /// <summary>
     /// Invite a bot player to the current lobby. The bot auto-selects a class and readies up.

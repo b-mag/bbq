@@ -8,6 +8,8 @@ import { GameMap, decodeMap } from '@/lib/map';
 import { VisualEffectsSystem } from '@/lib/engine/effects';
 import { noteAttack } from '@/lib/engine/spriteAnim';
 import { normalizeFigure, type FigureId } from '@/lib/engine/sprites';
+import { canvasCursorCss, normalizeCursor, type CursorStyle } from '@/lib/engine/cursor';
+import { usePlayerStats } from '@/hooks/usePlayerStats';
 import GameCanvas from '@/components/GameCanvas';
 import GameHUD from '@/components/GameHUD';
 import OverworldView from '@/components/OverworldView';
@@ -37,7 +39,9 @@ export default function Home() {
   const effectsSystemRef = useRef<VisualEffectsSystem | null>(null);
   const [isSpectating, setIsSpectating] = useState(false);
   const [spectateTargetId, setSpectateTargetId] = useState<string | null>(null);
-  const deathTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [showHudDungeon, setShowHudDungeon] = useState(false);
+  const [cursorDungeon, setCursorDungeon] = useState<CursorStyle>('crosshair');
+  const stats = usePlayerStats();
 
   // Dungeon WebSocket (connects to party leader's Carcosa.Server)
   const ws = useWebSocket({
@@ -50,21 +54,20 @@ export default function Home() {
   const gameInput = useGameInput({
     send: ws.send,
     map: gameMap,
-    active: appState === 'dungeon' && ws.status === 'connected' && !chatFocused && !isSpectating,
+    active: appState === 'dungeon' && ws.status === 'connected' && !chatFocused,
     onFire: useCallback((x: number, y: number, angle: number) => {
       const fx = effectsSystemRef.current;
       if (ws.playerId) noteAttack(`player_${ws.playerId}`);
       if (!fx) return;
-      const localEntity = entities.find(e => e.id === `player_${ws.playerId}`);
-      const playerClass = localEntity?.subType || '';
-      if (playerClass === 'surgeon') {
+      const ability = stats.primaryAbility;
+      if (ability === 'pale_blade' || ability === 'bone_cleaver') {
         fx.addSlashArc(x, y, angle);
       } else {
         const flashX = x + Math.cos(angle) * 0.4;
         const flashY = y + Math.sin(angle) * 0.4;
-        fx.addMuzzleFlash(flashX, flashY, angle, '#ffc832', playerClass === 'detective' ? 1.5 : 0.8);
+        fx.addMuzzleFlash(flashX, flashY, angle, '#ffc832', ability === 'void_bolt' ? 1.5 : 0.8);
       }
-    }, [entities, ws.playerId]),
+    }, [stats.primaryAbility, ws.playerId]),
   });
 
   const addLog = useCallback((msg: string) => {
@@ -160,27 +163,15 @@ export default function Home() {
     }
   }, [appState, ws.playerId, entities.length > 0]);
 
-  // Spectate logic (same as before)
+  // Death no longer spectates — the server returns the player to the entrance.
   useEffect(() => {
     if (appState !== 'dungeon' || !ws.playerId) return;
     const localEntity = entities.find(e => e.id === `player_${ws.playerId}`);
-    if (!localEntity) return;
-    if (!localEntity.isAlive && !isSpectating && !deathTimerRef.current) {
-      deathTimerRef.current = setTimeout(() => {
-        const alive = entities.filter(e => e.entityType === 'player' && e.isAlive && e.id !== `player_${ws.playerId}`);
-        if (alive.length > 0) {
-          setSpectateTargetId(alive[0].id);
-          setIsSpectating(true);
-        }
-        deathTimerRef.current = null;
-      }, 3000);
+    if (localEntity?.isAlive) {
+      if (isSpectating) setIsSpectating(false);
+      if (spectateTargetId) setSpectateTargetId(null);
     }
-    if (localEntity.isAlive && (isSpectating || deathTimerRef.current)) {
-      if (deathTimerRef.current) { clearTimeout(deathTimerRef.current); deathTimerRef.current = null; }
-      setIsSpectating(false);
-      setSpectateTargetId(null);
-    }
-  }, [entities, ws.playerId, appState, isSpectating]);
+  }, [entities, ws.playerId, appState, isSpectating, spectateTargetId]);
 
   // Only leave after a live dungeon socket actually drops — not the
   // disconnected window before the first connect (REST map is already set).
@@ -220,6 +211,14 @@ export default function Home() {
       }
     };
     bootstrap();
+    fetch('/api/gameplay/settings')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        setShowHudDungeon(!!d.showHudDungeon);
+        setCursorDungeon(normalizeCursor(d.cursorDungeon));
+      })
+      .catch(() => {});
   }, []);
 
   // Enter overworld from connect screen
@@ -247,6 +246,14 @@ export default function Home() {
       setGameMap(decodeMap(data.map));
     }
     setAppState('dungeon');
+    fetch('/api/gameplay/settings')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        setShowHudDungeon(!!d.showHudDungeon);
+        setCursorDungeon(normalizeCursor(d.cursorDungeon));
+      })
+      .catch(() => {});
   };
 
   // Connect after dungeon state commits so the message handler is subscribed.
@@ -358,6 +365,7 @@ export default function Home() {
         spectateTargetName={
           spectateTargetId ? entities.find(e => e.id === spectateTargetId)?.subType || 'Teammate' : undefined
         }
+        showChrome={showHudDungeon}
       >
         <GameCanvas
           map={gameMap}
@@ -371,6 +379,7 @@ export default function Home() {
           onEffectsReady={(fx) => { effectsSystemRef.current = fx; }}
           inputHandler={gameInput.inputHandler}
           localFigure={playerFigure || 'b'}
+          cursor={canvasCursorCss(cursorDungeon)}
         />
       </GameHUD>
     );

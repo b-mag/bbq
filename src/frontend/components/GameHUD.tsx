@@ -59,13 +59,15 @@ interface GameHUDProps {
   isSpectating?: boolean;
   /** Name/class of the player being spectated. */
   spectateTargetName?: string;
+  /** Surrounding HUD chrome. DEV setting; default off. */
+  showChrome?: boolean;
   children: React.ReactNode; // The game canvas
 }
 
 export default function GameHUD({
   localPlayerId,
   entities,
-  sessionInfo,
+  sessionInfo: _sessionInfo,
   events,
   latency,
   chatMessages,
@@ -75,12 +77,12 @@ export default function GameHUD({
   onDisconnect,
   isSpectating = false,
   spectateTargetName,
+  showChrome = false,
   children,
 }: GameHUDProps) {
   const localEntity = entities.find(e => e.id === `player_${localPlayerId}`);
   const playerEntities = entities.filter(e => e.entityType === 'player');
   const enemyCount = entities.filter(e => e.entityType === 'enemy').length;
-  const currentWave = sessionInfo?.currentWave ?? 0;
 
   // Chat selector open state — toggled by Enter key
   const [chatOpen, setChatOpen] = useState(false);
@@ -136,6 +138,82 @@ export default function GameHUD({
     onChatBlur();
   };
 
+  const canvasStage = (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      overflow: 'hidden',
+      border: '2px solid #4a3d2e',
+      borderRadius: '4px',
+      position: 'relative',
+      width: showChrome ? '100%' : 800,
+      height: showChrome ? '100%' : 600,
+    }}>
+      {children}
+      <GameEventOverlay events={events} />
+      {isSpectating && (
+        <div style={{
+          position: 'absolute',
+          bottom: '10px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'rgba(26, 20, 16, 0.85)',
+          border: '1px solid #4a3d2e',
+          borderRadius: '4px',
+          padding: '6px 16px',
+          color: '#c9a84c',
+          fontSize: '0.8rem',
+          fontFamily: 'Georgia, serif',
+          textAlign: 'center',
+          pointerEvents: 'none',
+        }}>
+          SPECTATING: {spectateTargetName || 'Teammate'}
+        </div>
+      )}
+      {chatOpen && (
+        <ChatSelector
+          onSelect={handleMessageClick}
+          onClose={() => { setChatOpen(false); onChatBlur(); }}
+        />
+      )}
+    </div>
+  );
+
+  if (!showChrome) {
+    return (
+      <div style={{
+        height: '100vh',
+        width: '100vw',
+        background: '#0d0a07',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        position: 'relative',
+        overflow: 'hidden',
+      }} onContextMenu={e => e.preventDefault()}>
+        {canvasStage}
+        <button
+          onClick={onDisconnect}
+          style={{
+            position: 'absolute',
+            top: 12,
+            right: 12,
+            background: 'transparent',
+            border: '1px solid #a83232',
+            borderRadius: 3,
+            padding: '4px 10px',
+            color: '#a83232',
+            cursor: 'pointer',
+            fontSize: '0.7rem',
+          }}
+        >
+          Leave
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div style={{
       display: 'grid',
@@ -174,7 +252,7 @@ export default function GameHUD({
           {localEntity && (
             <>
               <div style={{ color: '#e8dcc8', fontSize: '0.85rem', marginTop: '0.3rem' }}>
-                {localEntity.subType ? localEntity.subType.charAt(0).toUpperCase() + localEntity.subType.slice(1) : 'Unknown'}
+                Investigator
               </div>
               {/* HP Bar */}
               <div style={{ marginTop: '0.5rem' }}>
@@ -201,7 +279,7 @@ export default function GameHUD({
                 fontSize: '0.7rem',
                 marginTop: '0.3rem',
               }}>
-                {localEntity.isAlive ? 'Active' : 'DOWNED - Need Revive!'}
+                {localEntity.isAlive ? 'Active' : 'Returned to entrance'}
               </div>
               {/* Med Kits */}
               {localEntity.medKits > 0 && (
@@ -225,13 +303,13 @@ export default function GameHUD({
         {/* Wave Info */}
         <div style={{ borderBottom: '1px solid #4a3d2e', paddingBottom: '0.5rem' }}>
           <div style={{ color: '#c9a84c', fontSize: '0.65rem', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-            Mission
+            Dungeon
           </div>
           <div style={{ color: '#e8dcc8', fontSize: '0.8rem', marginTop: '0.2rem' }}>
-            Wave {currentWave}/5
+            {enemyCount} remaining
           </div>
           <div style={{ color: '#9a8b74', fontSize: '0.7rem' }}>
-            {enemyCount} cultists remaining
+            Fixed encounter — no respawn
           </div>
         </div>
 
@@ -239,9 +317,9 @@ export default function GameHUD({
         <div style={{ fontSize: '0.6rem', color: '#6a5d4a' }}>
           <div style={{ color: '#9a8b74', fontSize: '0.65rem', marginBottom: '0.3rem' }}>Controls</div>
           <div>WASD — Move</div>
-          <div>Click/Space — Attack</div>
-          <div>E — Special Ability</div>
-          <div>F — Revive Ally</div>
+          <div>LMB — Primary</div>
+          <div>RMB — Secondary</div>
+          <div>F — Interact</div>
           <div>H — Use Med Kit</div>
           <div>Enter — Chat</div>
         </div>
@@ -276,43 +354,8 @@ export default function GameHUD({
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
-        border: '2px solid #4a3d2e',
-        borderRadius: '4px',
-        position: 'relative',
       }}>
-        {children}
-        {/* Game event overlay */}
-        <GameEventOverlay events={events} />
-        {/* Spectate mode overlay */}
-        {isSpectating && (
-          <div style={{
-            position: 'absolute',
-            bottom: '10px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            background: 'rgba(26, 20, 16, 0.85)',
-            border: '1px solid #4a3d2e',
-            borderRadius: '4px',
-            padding: '6px 16px',
-            color: '#c9a84c',
-            fontSize: '0.8rem',
-            fontFamily: 'Georgia, serif',
-            textAlign: 'center',
-            pointerEvents: 'none',
-          }}>
-            SPECTATING: {spectateTargetName || 'Teammate'}
-            <div style={{ color: '#6a5d4a', fontSize: '0.6rem', marginTop: '2px' }}>
-              Press Tab to cycle
-            </div>
-          </div>
-        )}
-        {/* Chat selector overlay (shown when Enter is pressed) */}
-        {chatOpen && (
-          <ChatSelector
-            onSelect={handleMessageClick}
-            onClose={() => { setChatOpen(false); onChatBlur(); }}
-          />
-        )}
+        {canvasStage}
       </div>
 
       {/* Bottom Bar — Abilities */}
@@ -331,19 +374,19 @@ export default function GameHUD({
         <AbilitySlot
           label="Primary"
           hotkey="LMB"
-          className={localEntity?.subType || ''}
+          abilityId={localEntity?.primaryAbility || ''}
           type="primary"
         />
         <AbilitySlot
           label="Special"
-          hotkey="E"
-          className={localEntity?.subType || ''}
+          hotkey="RMB"
+          abilityId={localEntity?.secondaryAbility || ''}
           type="secondary"
         />
         <AbilitySlot
           label="Interact"
           hotkey="F"
-          className=""
+          abilityId=""
           type="interact"
         />
       </div>
@@ -546,29 +589,28 @@ function ChatSelector({ onSelect, onClose }: {
  * Ability slot display in the bottom bar.
  * Shows the ability name and hotkey for each class's abilities.
  */
-function AbilitySlot({ label, hotkey, className, type }: {
+function AbilitySlot({ label: _label, hotkey, abilityId, type }: {
   label: string;
   hotkey: string;
-  className: string;
+  abilityId: string;
   type: 'primary' | 'secondary' | 'interact';
 }) {
+  const names: Record<string, string> = {
+    ember_spray: 'Ember Spray',
+    pale_blade: 'Pale Blade',
+    void_bolt: 'Void Bolt',
+    bone_cleaver: 'Bone Cleaver',
+    hex_dart: 'Hex Dart',
+    warding_light: 'Warding Light',
+    iron_veil: 'Iron Veil',
+    shadow_step: 'Shadow Step',
+    grim_howl: 'Grim Howl',
+    cinder_ward: 'Cinder Ward',
+    soul_projection: 'Soul Projection',
+  };
   const getAbilityName = () => {
-    if (type === 'interact') return 'Revive';
-    if (type === 'primary') {
-      switch (className) {
-        case 'gangster': return 'Tommy Gun';
-        case 'detective': return 'Magnum';
-        case 'surgeon': return 'Dagger';
-        default: return 'Attack';
-      }
-    }
-    if (type === 'secondary') {
-      switch (className) {
-        case 'surgeon': return 'Group Heal';
-        default: return '\u2014';
-      }
-    }
-    return '\u2014';
+    if (type === 'interact') return 'Interact';
+    return names[abilityId] || (type === 'primary' ? 'Primary' : 'Secondary');
   };
 
   return (

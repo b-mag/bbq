@@ -3,33 +3,9 @@
  * input.ts — Keyboard and Mouse Input Handler
  * =============================================================================
  *
- * WHY A DEDICATED INPUT CLASS:
- * The game needs to track which keys are CURRENTLY HELD (not just key events).
- * For movement, we need to know "is W held RIGHT NOW" every 50ms (at tick rate).
- * The InputHandler continuously tracks held keys in a Set and provides a snapshot
- * via getState() that the input loop samples at 20Hz.
- *
- * HYBRID FIRE CONTROLS:
- * Primary fire is triggered by EITHER:
- *   - Left mouse click on the game canvas (scoped to canvas element only)
- *   - Spacebar press (works regardless of mouse position)
- * This gives players two options: mouse-aimed click-to-shoot (modern feel) or
- * spacebar (retro arcade feel). Both use the current aimAngle from mouse position.
- *
- * WHY CANVAS-SCOPED MOUSE CLICKS:
- * Mouse click listeners are attached to the canvas element specifically (not window).
- * This prevents clicking on HUD buttons, chat UI, or other React DOM elements from
- * accidentally firing the weapon. Mouse MOVE events stay on window so aim tracking
- * works even when the cursor is briefly outside the canvas bounds.
- *
- * AIM ANGLE:
- * The aim direction is calculated from the mouse cursor position relative to the
- * player's position on screen. Updated every mouse move event and read at tick rate.
- * The angle is sent to the server so projectiles fire in the correct direction.
- *
- * INPUT FILTERING:
- * When the user opens the chat selector (Enter key), the InputHandler is disabled
- * via the `enabled` setter. This clears all held keys and mouse state immediately.
+ * Movement keys are held-state. Combat is click-to-cast like the overworld:
+ * left mouse = primary ability, right mouse = secondary. One fire per click
+ * (not held-repeat at 20Hz). Space and E are not combat leftovers.
  * =============================================================================
  */
 
@@ -38,9 +14,9 @@ export interface InputState {
   moveX: number;
   /** Vertical movement: -1 (up) to 1 (down). */
   moveY: number;
-  /** True if primary fire is active (mouse click on canvas OR spacebar held). */
+  /** True for one sample after a left-click (primary ability). */
   primaryFire: boolean;
-  /** True if secondary ability key (E) is held. */
+  /** True for one sample after a right-click (secondary ability). */
   secondaryAbility: boolean;
   /** True if interact key (F) is held. */
   interact: boolean;
@@ -58,8 +34,8 @@ export class InputHandler {
   private keys: Set<string> = new Set();
   private mouseX: number = 0;
   private mouseY: number = 0;
-  private mouseDown: boolean = false;
-  private rightMouseDown: boolean = false;
+  private pendingPrimary = false;
+  private pendingSecondary = false;
   private _aimAngle: number = 0;
   private _enabled: boolean = true;
   /** Reference to the canvas element for scoped mouse click events. */
@@ -133,8 +109,8 @@ export class InputHandler {
     this._enabled = value;
     if (!value) {
       this.keys.clear();
-      this.mouseDown = false;
-      this.rightMouseDown = false;
+      this.pendingPrimary = false;
+      this.pendingSecondary = false;
     }
   }
 
@@ -169,12 +145,16 @@ export class InputHandler {
       moveY /= magnitude;
     }
 
+    const primaryFire = this.pendingPrimary;
+    const secondaryAbility = this.pendingSecondary;
+    this.pendingPrimary = false;
+    this.pendingSecondary = false;
+
     return {
       moveX,
       moveY,
-      // HYBRID FIRE: left-click on canvas OR spacebar triggers primary fire
-      primaryFire: this.mouseDown || this.keys.has(' '),
-      secondaryAbility: this.rightMouseDown || this.keys.has('e'),
+      primaryFire,
+      secondaryAbility,
       interact: this.keys.has('f'),
       useMedKit: this.keys.has('h'),
       aimAngle: this._aimAngle,
@@ -214,7 +194,7 @@ export class InputHandler {
     this.keys.add(key);
 
     // Prevent default for game keys (prevent page scrolling, etc.)
-    if (['w', 'a', 's', 'd', ' ', 'e', 'f', 'h', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
+    if (['w', 'a', 's', 'd', 'f', 'h', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
       e.preventDefault();
     }
 
@@ -239,10 +219,10 @@ export class InputHandler {
   private handleCanvasMouseDown(e: MouseEvent): void {
     if (!this._enabled) return;
     if (e.button === 0) {
-      this.mouseDown = true;
+      this.pendingPrimary = true;
       e.preventDefault();
     } else if (e.button === 2) {
-      this.rightMouseDown = true;
+      this.pendingSecondary = true;
       e.preventDefault();
     }
   }
@@ -254,18 +234,13 @@ export class InputHandler {
   /**
    * Mouse up on window — catches release even if cursor left canvas while holding.
    */
-  private handleMouseUp(e: MouseEvent): void {
-    if (e.button === 0) {
-      this.mouseDown = false;
-    } else if (e.button === 2) {
-      this.rightMouseDown = false;
-    }
+  private handleMouseUp(_e: MouseEvent): void {
+    // Click-to-cast: fire is latched on mousedown, consumed by getState().
   }
 
   private handleBlur(): void {
-    // Clear all input state when window loses focus
     this.keys.clear();
-    this.mouseDown = false;
-    this.rightMouseDown = false;
+    this.pendingPrimary = false;
+    this.pendingSecondary = false;
   }
 }

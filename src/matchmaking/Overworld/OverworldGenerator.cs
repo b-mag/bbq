@@ -21,7 +21,7 @@ namespace Carcosa.Matchmaking.Overworld;
 
 public static class OverworldGenerator
 {
-    // Greybox core remains 200×200; LTTP-scale expansion tracked in OVERWORLD_VISION.md
+    // Greybox core remains 200x200; LTTP-scale expansion tracked in implementations/OVERWORLD_VISION.md
     public const int DefaultWidth = 200;
     public const int DefaultHeight = 200;
 

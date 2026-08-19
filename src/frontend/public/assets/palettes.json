@@ -752,6 +752,6 @@
     "Pick a named palette when making new art so biomes stay consistent.",
     "drowned_dock = Labyrinth of Dagon dungeon + dream-ship.",
     "agwan = Merek and entrance wardens (bone/charcoal + rust).",
-    "Re-run this script after packing new PNGs: python dev_scripts/extract-palettes.py"
+    "Re-run this script after packing new PNGs: python dev_scripts/python/palettes/extract-palettes.py"
   ]
 }

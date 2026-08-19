@@ -173,6 +173,26 @@ public sealed class OverworldCombatSync
         dungeonPlayer.Speed = _localPlayer.Speed;
         dungeonPlayer.StaminaCostReduction = _localPlayer.StaminaCostReduction;
         dungeonPlayer.BonusHealAmount = _localPlayer.BonusHealAmount;
+        dungeonPlayer.SubType = PeerIdentity.NormalizeFigure(_localIdentity.Figure);
+    }
+
+    /// <summary>Write dungeon XP/level gains back onto the overworld player.</summary>
+    public void CopyProgressionFromDungeonPlayer(Entity dungeonPlayer)
+    {
+        _localPlayer.Level = dungeonPlayer.Level;
+        _localPlayer.XP = dungeonPlayer.XP;
+        _localPlayer.MaxHealth = dungeonPlayer.MaxHealth;
+        _localPlayer.Health = Math.Min(_localPlayer.Health, _localPlayer.MaxHealth);
+        _localPlayer.MaxStamina = dungeonPlayer.MaxStamina;
+        _localPlayer.StaminaRegenRate = dungeonPlayer.StaminaRegenRate;
+        _localPlayer.IsDirty = true;
+    }
+
+    /// <summary>Grant a dungeon drop into the local backpack.</summary>
+    public void GrantDungeonLoot(string itemId, int quantity)
+    {
+        if (string.IsNullOrEmpty(itemId) || quantity <= 0) return;
+        _inventory.AddItem(itemId, quantity);
     }
 
     /// <summary>When true, equip/ability changes are refused (in dungeon).</summary>
@@ -994,6 +1014,10 @@ public sealed class OverworldCombatSync
             ShowGlyphOverlay = existing.ShowGlyphOverlay,
             ShowFps = existing.ShowFps,
             DevMode = existing.DevMode,
+            ShowHudOverworld = existing.ShowHudOverworld,
+            ShowHudDungeon = existing.ShowHudDungeon,
+            CursorOverworld = DungeonRules.NormalizeCursor(existing.CursorOverworld),
+            CursorDungeon = DungeonRules.NormalizeCursor(existing.CursorDungeon),
             ExploredFogBase64 = existing.ExploredFogBase64,
             Level = _localPlayer.Level,
             XP = _localPlayer.XP,

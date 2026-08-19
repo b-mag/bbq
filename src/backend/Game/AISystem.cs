@@ -21,6 +21,8 @@
 //   - MaxSearchNodes=500 in pathfinding prevents runaway searches on complex maps
 // =============================================================================
 
+using Carcosa.Server.Gameplay;
+
 namespace Carcosa.Server.Game;
 
 /// <summary>
@@ -89,6 +91,24 @@ public sealed class AISystem
     }
 
     /// <summary>
+    /// Pull this enemy onto the attacker. Used when auto-aggro is off (dungeon level 10-).
+    /// Already-aggroed enemies keep chasing even into the entrance foyer.
+    /// </summary>
+    public void NotifyAttacked(Entity enemy, string attackerId)
+    {
+        if (!enemy.IsAlive) return;
+        enemy.AggroTargetId = attackerId;
+        enemy.AggroTicks = 0;
+        enemy.IsDirty = true;
+        if (_brains.TryGetValue(enemy.Id, out var brain))
+        {
+            brain.State = AIState.Chase;
+            brain.TargetPlayerId = attackerId;
+            brain.StateTicks = 0;
+        }
+    }
+
+    /// <summary>
     /// Update all enemy AI for one tick.
     /// </summary>
     public void Update(GameState state)
@@ -127,14 +147,19 @@ public sealed class AISystem
         }
 
         // State transitions
+        var provoked = !string.IsNullOrEmpty(enemy.AggroTargetId);
+        var canAutoAggro = DungeonRules.AutoAggro(state.AvgLevel);
+        var seesPlayer = nearestPlayer != null && nearestDist <= DetectionRange
+            && Pathfinding.HasLineOfSight(state.Map!, enemy.X, enemy.Y, nearestPlayer.X, nearestPlayer.Y);
+        var shouldPull = seesPlayer && (canAutoAggro || provoked);
+
         switch (brain.State)
         {
             case AIState.Idle:
-                if (nearestPlayer != null && nearestDist <= DetectionRange
-                    && Pathfinding.HasLineOfSight(state.Map!, enemy.X, enemy.Y, nearestPlayer.X, nearestPlayer.Y))
+                if (shouldPull)
                 {
                     brain.State = AIState.Chase;
-                    brain.TargetPlayerId = nearestPlayer.Id;
+                    brain.TargetPlayerId = nearestPlayer!.Id;
                     brain.StateTicks = 0;
                 }
                 else if (brain.StateTicks > 40) // Start patrolling after 2 seconds idle
@@ -146,12 +171,11 @@ public sealed class AISystem
                 break;
 
             case AIState.Patrol:
-                // Check for player detection
-                if (nearestPlayer != null && nearestDist <= DetectionRange
-                    && Pathfinding.HasLineOfSight(state.Map!, enemy.X, enemy.Y, nearestPlayer.X, nearestPlayer.Y))
+                // Check for player detection (or continue a pull that already started)
+                if (shouldPull)
                 {
                     brain.State = AIState.Chase;
-                    brain.TargetPlayerId = nearestPlayer.Id;
+                    brain.TargetPlayerId = nearestPlayer!.Id;
                     brain.StateTicks = 0;
                 }
                 else
@@ -190,8 +214,8 @@ public sealed class AISystem
                     break;
                 }
 
-                // Check if in attack range (ranged enemies attack from distance)
-                var attackRange = IsRangedEnemy(enemy.SubType) ? AttackRangeRanged : AttackRangeMelee;
+                // Check if in attack range (ranged enemies attack from distance, unless this dungeon is melee-only)
+                var attackRange = UsesProjectiles(state, enemy.SubType) ? AttackRangeRanged : AttackRangeMelee;
                 if (nearestDist <= attackRange)
                 {
                     brain.State = AIState.Attack;
@@ -222,7 +246,7 @@ public sealed class AISystem
                     break;
                 }
 
-                var atkRange = IsRangedEnemy(enemy.SubType) ? AttackRangeRanged : AttackRangeMelee;
+                var atkRange = UsesProjectiles(state, enemy.SubType) ? AttackRangeRanged : AttackRangeMelee;
                 if (nearestDist > atkRange * 1.2f)
                 {
                     brain.State = AIState.Chase;
@@ -278,49 +302,56 @@ public sealed class AISystem
 
     private void PerformAttack(GameState state, Entity enemy, Entity target)
     {
-        switch (enemy.SubType)
+        var kind = enemy.SubType ?? "";
+        if (kind.StartsWith("elite_", StringComparison.OrdinalIgnoreCase))
+            kind = kind["elite_".Length..];
+
+        switch (kind)
         {
             case "cultist_acolyte":
-                // Melee attack — basic cultist rushes in and strikes
-                target.TakeDamage(5);
+                target.TakeDamage(DungeonRules.ScaleStat(5, state.AvgLevel));
                 break;
 
             case "cultist_torch":
-                // Melee + burn DoT — torch cultist sets player on fire
-                // Deals 8 immediate damage. DoT is handled by marking the target.
-                // (DoT tick damage applied by GameFlowSystem if we add a burn status later;
-                //  for now we do burst 8 + 3 bonus = 11 total as a single hit.)
-                target.TakeDamage(11);
+                target.TakeDamage(DungeonRules.ScaleStat(11, state.AvgLevel));
                 break;
 
             case "cultist_chanter":
-                // Ranged: fire an eldritch bolt toward the player
-                FireEnemyProjectile(state, enemy, target, "eldritch_bolt", 8, 10f, 0.4f);
+                if (!DungeonRules.AllowsEnemyProjectiles(state.AvgLevel))
+                    target.TakeDamage(DungeonRules.ScaleStat(8, state.AvgLevel));
+                else
+                    FireEnemyProjectile(state, enemy, target, "eldritch_bolt", DungeonRules.ScaleStat(8, state.AvgLevel), 10f, 0.4f);
                 break;
 
             case "cultist_dagger":
-                // Ranged: throw a fast dagger projectile
-                FireEnemyProjectile(state, enemy, target, "dagger", 6, 8f, 0.5f);
+                if (!DungeonRules.AllowsEnemyProjectiles(state.AvgLevel))
+                    target.TakeDamage(DungeonRules.ScaleStat(6, state.AvgLevel));
+                else
+                    FireEnemyProjectile(state, enemy, target, "dagger", DungeonRules.ScaleStat(6, state.AvgLevel), 8f, 0.5f);
                 break;
 
             case "cultist_shotgun":
-                // Ranged: fire a spread of 5 pellets (shotgun blast)
+                if (!DungeonRules.AllowsEnemyProjectiles(state.AvgLevel))
+                {
+                    target.TakeDamage(DungeonRules.ScaleStat(15, state.AvgLevel));
+                    break;
+                }
                 var baseAngle = MathF.Atan2(target.Y - enemy.Y, target.X - enemy.X);
+                var pelletDamage = DungeonRules.ScaleStat(3, state.AvgLevel);
                 for (int i = 0; i < 5; i++)
                 {
-                    var spreadOffset = (i - 2) * 0.15f; // ~±0.3 radians total spread
+                    var spreadOffset = (i - 2) * 0.15f;
                     var pelletAngle = baseAngle + spreadOffset + (_rng.NextSingle() - 0.5f) * 0.1f;
-                    var pelletId = $"eproj_{_rng.Next(100000)}";
                     var pellet = new Entity
                     {
-                        Id = pelletId,
+                        Id = $"eproj_{_rng.Next(100000)}",
                         Type = EntityType.Projectile,
                         SubType = "shotgun_pellet",
                         X = enemy.X + MathF.Cos(pelletAngle) * 0.5f,
                         Y = enemy.Y + MathF.Sin(pelletAngle) * 0.5f,
                         VelocityX = MathF.Cos(pelletAngle) * 0.5f,
                         VelocityY = MathF.Sin(pelletAngle) * 0.5f,
-                        Damage = 3,
+                        Damage = pelletDamage,
                         Range = 6f,
                         SourceEntityId = enemy.Id,
                         IsAlive = true,
@@ -333,57 +364,31 @@ public sealed class AISystem
                 break;
 
             case "cultist_lightning":
-                // Ranged: fire a lightning bolt that passes through entities (hits multiple)
-                // Lightning bolt has high range and damage but slow cooldown
-                FireEnemyProjectile(state, enemy, target, "lightning_bolt", 12, 12f, 0.6f);
-                // Note: the "passes through" behavior is handled in GameLoop.CheckCollisions
-                // by NOT removing lightning_bolt projectiles on first hit
+                if (!DungeonRules.AllowsEnemyProjectiles(state.AvgLevel))
+                    target.TakeDamage(DungeonRules.ScaleStat(12, state.AvgLevel));
+                else
+                    FireEnemyProjectile(state, enemy, target, "lightning_bolt", DungeonRules.ScaleStat(12, state.AvgLevel), 12f, 0.6f);
                 break;
 
             case "cult_leader":
-                // AoE damage to all nearby players within 2-tile radius
+                var leaderDmg = DungeonRules.ScaleStat(10, state.AvgLevel);
                 foreach (var player in state.GetAlivePlayers())
                 {
                     var dx = player.X - enemy.X;
                     var dy = player.Y - enemy.Y;
-                    if (dx * dx + dy * dy <= 4f) // 2 tile radius
-                    {
-                        player.TakeDamage(10);
-                    }
+                    if (dx * dx + dy * dy <= 4f)
+                        player.TakeDamage(leaderDmg);
                 }
                 break;
 
             case "boss_warehouse":
-                // Boss attack: AoE slam (15 dmg in 3-tile radius) + summon 2 minions
+                var slamDmg = DungeonRules.ScaleStat(15, state.AvgLevel);
                 foreach (var player in state.GetAlivePlayers())
                 {
                     var bDx = player.X - enemy.X;
                     var bDy = player.Y - enemy.Y;
-                    if (bDx * bDx + bDy * bDy <= 9f) // 3 tile radius
-                    {
-                        player.TakeDamage(15);
-                    }
-                }
-                // Summon 2 torch cultist minions near the boss
-                for (int i = 0; i < 2; i++)
-                {
-                    var spawnAngle = _rng.NextSingle() * MathF.PI * 2;
-                    var minionId = $"enemy_minion_{_rng.Next(100000)}";
-                    var minion = new Entity
-                    {
-                        Id = minionId,
-                        Type = EntityType.Enemy,
-                        SubType = "cultist_torch",
-                        X = enemy.X + MathF.Cos(spawnAngle) * 2f,
-                        Y = enemy.Y + MathF.Sin(spawnAngle) * 2f,
-                        Health = 25,
-                        MaxHealth = 25,
-                        Speed = 3f,
-                        IsAlive = true,
-                        IsDirty = true
-                    };
-                    state.AddEntity(minion);
-                    RegisterEnemy(minion);
+                    if (bDx * bDx + bDy * bDy <= 9f)
+                        player.TakeDamage(slamDmg);
                 }
                 break;
         }
@@ -419,11 +424,8 @@ public sealed class AISystem
         state.AddEntity(proj);
     }
 
-    /// <summary>
-    /// Determine if an enemy type attacks from range (affects chase/attack distance).
-    /// </summary>
-    private static bool IsRangedEnemy(string? subType) => subType is
-        "cultist_chanter" or "cultist_dagger" or "cultist_shotgun" or "cultist_lightning";
+    private static bool UsesProjectiles(GameState state, string? subType)
+        => DungeonRules.UsesProjectiles(subType, state.AvgLevel);
 
     private static int GetAttackCooldown(string? subType) => subType switch
     {

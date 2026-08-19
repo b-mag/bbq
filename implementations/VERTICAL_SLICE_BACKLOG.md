@@ -115,7 +115,7 @@ Do **not** spawn a second Carcosa.Server process per dungeon.
 
 ## Loot — elites, bosses, discards (design to implement)
 
-There is a plan file (`P2P_LOOT_DISTRIBUTION_PLAN.md`) whose Phase 1 boxes are still unchecked. Overworld elite drops exist in `OverworldCombatSync`; dungeon loot is unused because dungeons never load.
+There is a plan file (`implementations/P2P_LOOT_DISTRIBUTION_PLAN.md`) whose Phase 1 boxes are still unchecked. Overworld elite drops exist in `OverworldCombatSync`; dungeon loot is unused because dungeons never load.
 
 ### Drop table (vertical slice)
 
@@ -309,7 +309,7 @@ Robert W. Chambers’ *The King in Yellow* does **not** put a ruined city *under
 
 So: drowned streets beneath Hali are a **Carcosa-the-game** reading of those lines, not a Chambers map. That is fine. “Suns sink *into* Hali” + cloud-waves is enough license to reveal something that was always under the water, only visible when the wider network (matchmaking) is present.
 
-**In-game name:** **Dim Carcosa** (already in `OVERWORLD_VISION.md`). Subtitle/tooltip: *“The cloud-waves recede.”* Do not call it “The Warehouse” or a generic “shop zone.”
+**In-game name:** **Dim Carcosa** (already in `implementations/OVERWORLD_VISION.md`). Subtitle/tooltip: *“The cloud-waves recede.”* Do not call it “The Warehouse” or a generic “shop zone.”
 
 Lake on the current 200×200 map is already painted: deep water ellipse around **(55, 90)**. That is the reveal site.
 
@@ -463,4 +463,4 @@ Keep the Glyph **UI close/ESC** work in P1 (that is UX, not NAT).
 | VFX (dungeon only today) | `lib/engine/effects.ts`, `GameCanvas.tsx` |
 | Friends (new) | new `FriendsStore` + overlay; persist next to `known-peers.json` |
 | Shard dropdown | `TrackerClient.cs`, matchmaking `Program.cs`, `P2POverlay.tsx` / Settings |
-| Loot plan | `P2P_LOOT_DISTRIBUTION_PLAN.md`, `OverworldCombatSync.cs` |
+| Loot plan | `implementations/P2P_LOOT_DISTRIBUTION_PLAN.md`, `OverworldCombatSync.cs` |

@@ -11,6 +11,8 @@
 
 import { useEffect, useState, useCallback, type CSSProperties } from 'react';
 
+import { normalizeCursor, type CursorStyle } from '@/lib/engine/cursor';
+
 export interface GameSettings {
   displayName: string;
   offlineMode: boolean;
@@ -18,6 +20,10 @@ export interface GameSettings {
   showGlyphOverlay: boolean;
   showFps: boolean;
   devMode: boolean;
+  showHudOverworld: boolean;
+  showHudDungeon: boolean;
+  cursorOverworld: CursorStyle;
+  cursorDungeon: CursorStyle;
 }
 
 interface SettingsPanelProps {
@@ -54,6 +60,10 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
     showGlyphOverlay: true,
     showFps: false,
     devMode: false,
+    showHudOverworld: false,
+    showHudDungeon: false,
+    cursorOverworld: 'crosshair',
+    cursorDungeon: 'crosshair',
   });
   const [status, setStatus] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -71,6 +81,10 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
           showGlyphOverlay: data.showGlyphOverlay !== false,
           showFps: !!data.showFps,
           devMode: !!data.devMode,
+          showHudOverworld: !!data.showHudOverworld,
+          showHudDungeon: !!data.showHudDungeon,
+          cursorOverworld: normalizeCursor(data.cursorOverworld),
+          cursorDungeon: normalizeCursor(data.cursorDungeon),
         });
       } catch { /* ignore */ }
     };
@@ -90,6 +104,10 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
           showGlyphOverlay: settings.showGlyphOverlay,
           showFps: settings.showFps,
           devMode: settings.devMode,
+          showHudOverworld: settings.showHudOverworld,
+          showHudDungeon: settings.showHudDungeon,
+          cursorOverworld: settings.cursorOverworld,
+          cursorDungeon: settings.cursorDungeon,
         }),
       });
       if (res.ok) {
@@ -101,6 +119,10 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
           showGlyphOverlay: saved.showGlyphOverlay !== false,
           showFps: !!saved.showFps,
           devMode: !!saved.devMode,
+          showHudOverworld: !!saved.showHudOverworld,
+          showHudDungeon: !!saved.showHudDungeon,
+          cursorOverworld: normalizeCursor(saved.cursorOverworld ?? settings.cursorOverworld),
+          cursorDungeon: normalizeCursor(saved.cursorDungeon ?? settings.cursorDungeon),
         };
         setSettings(next);
         onSaved?.(next);
@@ -129,7 +151,9 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
         border: '1px solid #4a3520',
         borderRadius: 8,
         minWidth: 340,
-        maxWidth: 420,
+        maxWidth: 440,
+        maxHeight: '90vh',
+        overflowY: 'auto',
       }} onClick={e => e.stopPropagation()}>
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -198,6 +222,41 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
           />
         </label>
 
+        <div style={{ marginBottom: 14 }}>
+          <label style={labelStyle}>Cursor in overworld</label>
+          <select
+            value={settings.cursorOverworld}
+            onChange={e => setSettings(s => ({ ...s, cursorOverworld: normalizeCursor(e.target.value) }))}
+            style={inputStyle}
+          >
+            <option value="off">Off</option>
+            <option value="crosshair">Crosshair</option>
+            <option value="sword">Sword</option>
+            <option value="hand">Hand</option>
+          </select>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <label style={labelStyle}>Cursor in dungeon</label>
+          <select
+            value={settings.cursorDungeon}
+            onChange={e => setSettings(s => ({ ...s, cursorDungeon: normalizeCursor(e.target.value) }))}
+            style={inputStyle}
+          >
+            <option value="off">Off</option>
+            <option value="crosshair">Crosshair</option>
+            <option value="sword">Sword</option>
+            <option value="hand">Hand</option>
+          </select>
+        </div>
+
+        <div style={{
+          margin: '16px 0 12px', paddingTop: 12, borderTop: '1px solid #4a3d2e',
+          color: '#c9a84c', fontSize: '0.7rem', letterSpacing: '0.14em', textTransform: 'uppercase',
+        }}>
+          DEV
+        </div>
+
         <label style={{ ...rowStyle, cursor: 'pointer' }}>
           <span style={{ color: '#e8dcc8', fontSize: '0.8rem' }}>
             Dev
@@ -209,6 +268,34 @@ export default function SettingsPanel({ onClose, onSaved }: SettingsPanelProps) 
             type="checkbox"
             checked={settings.devMode}
             onChange={e => setSettings(s => ({ ...s, devMode: e.target.checked }))}
+          />
+        </label>
+
+        <label style={{ ...rowStyle, cursor: 'pointer' }}>
+          <span style={{ color: '#e8dcc8', fontSize: '0.8rem' }}>
+            HUD in overworld
+            <span style={{ display: 'block', color: '#6a5d4a', fontSize: '0.65rem', marginTop: 2 }}>
+              HP, stamina, XP, and ability bar. Default off.
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            checked={settings.showHudOverworld}
+            onChange={e => setSettings(s => ({ ...s, showHudOverworld: e.target.checked }))}
+          />
+        </label>
+
+        <label style={{ ...rowStyle, cursor: 'pointer' }}>
+          <span style={{ color: '#e8dcc8', fontSize: '0.8rem' }}>
+            HUD in dungeon
+            <span style={{ display: 'block', color: '#6a5d4a', fontSize: '0.65rem', marginTop: 2 }}>
+              Surrounding dungeon chrome. Default off.
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            checked={settings.showHudDungeon}
+            onChange={e => setSettings(s => ({ ...s, showHudDungeon: e.target.checked }))}
           />
         </label>
 

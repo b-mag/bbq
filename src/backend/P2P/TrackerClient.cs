@@ -107,6 +107,8 @@ public sealed class TrackerClient
     {
         _heartbeatTask = Task.Run(() => HeartbeatLoop(_cts.Token));
         Console.WriteLine($"[P2P:Tracker] Started (URL: {_trackerUrl})");
+        if (_localIdentity.PublicAddressPinned)
+            Console.WriteLine($"[P2P:Tracker] Public address pinned at {_localIdentity.PublicAddress}; reflect skipped");
     }
 
     /// <summary>
@@ -137,8 +139,9 @@ public sealed class TrackerClient
         {
             try
             {
-                // Step 1: Discover our public address (STUN-like)
-                await DiscoverPublicAddressAsync();
+                // Step 1: Discover our public address (STUN-like) unless --public-address pinned it
+                if (!_localIdentity.PublicAddressPinned)
+                    await DiscoverPublicAddressAsync();
 
                 // Step 2: Register with tracker
                 var peers = await RegisterAndDiscoverAsync();
@@ -189,6 +192,9 @@ public sealed class TrackerClient
     /// </summary>
     private async Task DiscoverPublicAddressAsync()
     {
+        if (_localIdentity.PublicAddressPinned)
+            return;
+
         try
         {
             var response = await _http.GetAsync($"{_trackerUrl}/api/tracker/reflect");

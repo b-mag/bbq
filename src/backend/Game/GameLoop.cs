@@ -38,6 +38,7 @@
 using System.Diagnostics;
 using Carcosa.Server.Network;
 using Carcosa.Server.Gameplay;
+using Carcosa.Server.P2P;
 
 namespace Carcosa.Server.Game;
 
@@ -131,23 +132,13 @@ public sealed class GameLoop : IDisposable
     /// Add a player entity to the game state with class-appropriate stats.
     /// Called by SessionManager when the game starts.
     /// </summary>
-    public Entity AddPlayer(string playerId, string playerName, string playerClass, float spawnX, float spawnY)
+    public Entity AddPlayer(string playerId, string playerName, string figure, float spawnX, float spawnY)
     {
-        // Med kit starting counts vary by class:
-        // Detective=3 (investigator, prepared), Gangster=1 (tough but not a medic), Surgeon=0 (IS the medic)
-        var medKits = playerClass switch
-        {
-            "detective" => 3,
-            "gangster" => 1,
-            "surgeon" => 0,
-            _ => 1
-        };
-
         var entity = new Entity
         {
             Id = $"player_{playerId}",
             Type = EntityType.Player,
-            SubType = playerClass,
+            SubType = PeerIdentity.NormalizeFigure(figure),
             OwnerId = playerId,
             X = spawnX,
             Y = spawnY,
@@ -156,7 +147,8 @@ public sealed class GameLoop : IDisposable
             Speed = PlayerSpeed,
             IsAlive = true,
             IsDirty = true,
-            MedKits = medKits
+            PrimaryAbility = "ember_spray",
+            SecondaryAbility = "iron_veil",
         };
 
         _state.AddEntity(entity);
@@ -255,6 +247,8 @@ public sealed class GameLoop : IDisposable
         //    Player projectiles only hit enemies; enemy projectiles only hit players.
         CheckCollisions();
 
+        ApplyPendingAggro();
+
         // 5. UPDATE AI: Only during active gameplay (not lobby/intermission).
         //    AI state machines decide enemy movement and attacks.
         //    Wave system handles spawning and wave progression.
@@ -263,14 +257,6 @@ public sealed class GameLoop : IDisposable
             _aiSystem.Update(_state);
             _waveSystem.Update(_state);
 
-            // Boss spawn trigger: wave 5, when most regular enemies are dead
-            if (_waveSystem.CurrentWave == 5 && !_waveSystem.BossSpawned
-                && _waveSystem.EnemiesRemaining < 8)
-            {
-                _waveSystem.SpawnBoss(_state);
-            }
-
-            // Victory condition: all waves complete AND no enemies remain
             if (_waveSystem.AllWavesComplete && _waveSystem.EnemiesRemaining == 0 && Session != null)
             {
                 Session.EndGame(victory: true);
@@ -332,20 +318,10 @@ public sealed class GameLoop : IDisposable
             entity.VelocityY = moveY * entity.Speed * TickDuration;
 
             // Process combat actions (fire, ability, interact)
-            if (input.PrimaryFire)
-            {
-                if (!string.IsNullOrEmpty(entity.PrimaryAbility))
-                    CombatSystem.ProcessAbility(_state, entity, entity.PrimaryAbility, input.AimAngle);
-                else
-                    CombatSystem.ProcessPrimaryFire(_state, entity, input.AimAngle);
-            }
-            if (input.SecondaryAbility)
-            {
-                if (!string.IsNullOrEmpty(entity.SecondaryAbility))
-                    CombatSystem.ProcessAbility(_state, entity, entity.SecondaryAbility, input.AimAngle);
-                else
-                    CombatSystem.ProcessSecondaryAbility(_state, entity);
-            }
+            if (input.PrimaryFire && !string.IsNullOrEmpty(entity.PrimaryAbility))
+                CombatSystem.ProcessAbility(_state, entity, entity.PrimaryAbility, input.AimAngle);
+            if (input.SecondaryAbility && !string.IsNullOrEmpty(entity.SecondaryAbility))
+                CombatSystem.ProcessAbility(_state, entity, entity.SecondaryAbility, input.AimAngle);
             if (input.Interact)
             {
                 _gameFlowSystem.ProcessReviveInteraction(_state, entity);
@@ -529,6 +505,9 @@ public sealed class GameLoop : IDisposable
                 {
                     var killed = target.TakeDamage(projectile.Damage);
 
+                    if (target.Type == EntityType.Enemy && sourceEntity.Type == EntityType.Player)
+                        CombatSystem.MarkEnemyHit(target, sourceEntity.Id);
+
                     // Track invader kills: award Cryptol when invader kills a co-op player
                     if (killed && target.Type == EntityType.Player && !target.IsInvader
                         && sourceEntity.Type == EntityType.Player && sourceEntity.IsInvader)
@@ -605,6 +584,19 @@ public sealed class GameLoop : IDisposable
     }
 
     /// <summary>
+    /// Enemies hit this tick (melee or projectile) start chasing even in passive dungeons.
+    /// </summary>
+    private void ApplyPendingAggro()
+    {
+        foreach (var (_, entity) in _state.Entities)
+        {
+            if (entity.Type != EntityType.Enemy || !entity.IsAlive) continue;
+            if (string.IsNullOrEmpty(entity.AggroTargetId)) continue;
+            _aiSystem.NotifyAttacked(entity, entity.AggroTargetId);
+        }
+    }
+
+    /// <summary>
     /// Decrement all cooldown timers by 1 tick.
     /// Cooldowns are set when abilities are used and prevent spam-firing.
     /// </summary>
@@ -666,7 +658,11 @@ public sealed class GameLoop : IDisposable
                 SubType = e.SubType,
                 IsAlive = e.IsAlive,
                 MedKits = e.MedKits,
-                AttackCooldown = e.PrimaryFireCooldown
+                AttackCooldown = e.PrimaryFireCooldown,
+                Stamina = e.Stamina,
+                MaxStamina = e.MaxStamina,
+                PrimaryAbility = e.PrimaryAbility,
+                SecondaryAbility = e.SecondaryAbility
             };
         }
 

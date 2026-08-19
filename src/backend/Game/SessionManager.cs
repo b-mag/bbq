@@ -191,13 +191,8 @@ public sealed class SessionManager
             Console.WriteLine($"[Session] Game starting with {readyPlayers.Count} players!");
 
             var seed = Random.Shared.Next();
-            var map = SelectedScenario switch
-            {
-                MapScenario.PallidSanctum => MapGenerator.GenerateTemple(100, 100, seed),
-                MapScenario.MountainCave => MapGenerator.GenerateCave(60, 50, seed),
-                MapScenario.DrownedDock => MapGenerator.GenerateDrownedDock(80, 60, seed),
-                _ => MapGenerator.Generate(80, 60, seed)
-            };
+            var level = Math.Max(1, _gameLoop.State.AvgLevel);
+            var map = DungeonRules.GenerateScaledMap(SelectedScenario, seed, level);
             StartWithMap(map);
             return true;
         }
@@ -207,7 +202,7 @@ public sealed class SessionManager
     /// Overworld dungeon enter: skip lobby and join the already-generated instance.
     /// First connector starts the session; later connectors spawn into the live map.
     /// </summary>
-    public void TryJoinActiveDungeon(string playerId, TileMap map, MapScenario scenario)
+    public void TryJoinActiveDungeon(string playerId, TileMap map, MapScenario scenario, int avgLevel = 1)
     {
         lock (_lock)
         {
@@ -220,6 +215,7 @@ public sealed class SessionManager
 
             if (State == SessionState.Lobby)
             {
+                _gameLoop.State.AvgLevel = Math.Max(1, avgLevel);
                 StartWithMap(map);
                 return;
             }
@@ -235,10 +231,11 @@ public sealed class SessionManager
                 _gameLoop.AddPlayer(
                 player.PlayerId,
                 player.PlayerName,
-                player.SelectedClass ?? "detective",
+                "b",
                 spawnX,
                 spawnY);
             ApplyOverworldLoadout(player.PlayerId);
+            RefreshAvgLevel();
             }
 
             BroadcastSessionInfo();
@@ -266,12 +263,13 @@ public sealed class SessionManager
             _gameLoop.AddPlayer(
                 player.PlayerId,
                 player.PlayerName,
-                player.SelectedClass ?? "detective",
+                "b",
                 spawnX,
                 spawnY);
             ApplyOverworldLoadout(player.PlayerId);
         }
 
+        RefreshAvgLevel();
         _gameLoop.Waves.StartWaves(_gameLoop.State);
         BroadcastSessionInfo();
     }
@@ -562,6 +560,64 @@ public sealed class SessionManager
         var entity = _gameLoop.State.GetPlayerByOwnerId(playerId);
         if (entity == null) return;
         _overworldCombat.CopyLoadoutToDungeonPlayer(entity);
+    }
+
+    private void RefreshAvgLevel()
+    {
+        var sum = 0;
+        var count = 0;
+        foreach (var player in _gameLoop.State.GetAlivePlayers())
+        {
+            sum += Math.Max(1, player.Level);
+            count++;
+        }
+
+        if (count > 0)
+            _gameLoop.State.AvgLevel = Math.Max(1, sum / count);
+        else if (_gameLoop.State.AvgLevel < 1)
+            _gameLoop.State.AvgLevel = 1;
+    }
+
+    /// <summary>
+    /// Award scaled XP and loot when a dungeon enemy dies. Host's overworld
+    /// progression is updated when the killer is the session host (solo path).
+    /// </summary>
+    public void OnDungeonEnemyKilled(Entity enemy, Entity killer)
+    {
+        var level = Math.Max(1, _gameLoop.State.AvgLevel);
+        var xp = ProgressionSystem.GetScaledKillXp(enemy.SubType, level);
+        ProgressionSystem.AwardXP(killer, xp);
+
+        var eligible = new HashSet<string>();
+        if (killer.OwnerId != null)
+            eligible.Add(killer.OwnerId);
+
+        var drops = LootSystem.GenerateDungeonDrops(enemy.SubType, enemy.X, enemy.Y, eligible, level);
+
+        if (_overworldCombat != null && killer.OwnerId == HostId)
+        {
+            _overworldCombat.CopyProgressionFromDungeonPlayer(killer);
+            foreach (var drop in drops)
+                _overworldCombat.GrantDungeonLoot(drop.ItemId, drop.Quantity);
+        }
+
+        var lootNames = drops.Count == 0
+            ? null
+            : string.Join(", ", drops.Select(d => d.Quantity > 1 ? $"{d.ItemId} x{d.Quantity}" : d.ItemId));
+        _ = _connectionManager.BroadcastAsync(new GameMessage
+        {
+            Type = MessageTypes.GameEvent,
+            GameEvent = new GameEventPayload
+            {
+                Event = "xp_award",
+                TargetId = killer.Id,
+                SourceId = enemy.Id,
+                Amount = xp,
+                X = enemy.X,
+                Y = enemy.Y,
+                Message = lootNames == null ? $"+{xp} XP" : $"+{xp} XP · {lootNames}"
+            }
+        });
     }
 }
 

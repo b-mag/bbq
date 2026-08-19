@@ -1,9 +1,9 @@
 # CARCOSA — Technical Architecture Documentation
 
-**Version:** 1.1  
-**Last Updated:** August 16, 2026  
+**Version:** 1.2  
+**Last Updated:** August 18, 2026  
 
-Also see [DEPENDENCY_TREE.md](DEPENDENCY_TREE.md) (C# project / class graph) and [SPRITE_TECHNICAL.md](SPRITE_TECHNICAL.md) (sprite sizes, palettes, asset pipeline).
+Also see [docs/DEPENDENCY_TREE.md](docs/DEPENDENCY_TREE.md) (C# project / class graph), [docs/SPRITE_TECHNICAL.md](docs/SPRITE_TECHNICAL.md) (sprite sizes, palettes, asset pipeline), and [docs/Developer_Testing_Guide.docx](docs/Developer_Testing_Guide.docx) (clone, build, and launch-script walkthrough).
 
 ---
 
@@ -18,21 +18,23 @@ Also see [DEPENDENCY_TREE.md](DEPENDENCY_TREE.md) (C# project / class graph) and
 ## Table of Contents
 
 1. [Executive Summary](#1-executive-summary)
-2. [Technology Stack](#2-technology-stack)
-3. [Project Structure](#3-project-structure)
-4. [Architecture Overview](#4-architecture-overview)
-5. [Current Gameplay Systems](#5-current-gameplay-systems)
-6. [How .NET Serves the React Frontend](#6-how-net-serves-the-react-frontend)
-7. [The P2P Mesh Network](#7-the-p2p-mesh-network)
-8. [Peer Discovery & Glyph Codes](#8-peer-discovery--glyph-codes)
-9. [The Matchmaking Service](#9-the-matchmaking-service)
-10. [Kafka Integration](#10-kafka-integration)
-11. [WebSocket Communication](#11-websocket-communication)
-12. [The Game Loop & Combat System](#12-the-game-loop--combat-system)
-13. [Frontend Architecture (React/Next.js)](#13-frontend-architecture-reactnextjs)
-14. [Native AOT & JSON Serialization](#14-native-aot--json-serialization)
-15. [Build, Deploy & Run](#15-build-deploy--run)
-16. [Next Steps / TODOs](#16-next-steps--todos)
+2. [Getting Started](#2-getting-started)
+3. [Technology Stack](#3-technology-stack)
+4. [Project Structure](#4-project-structure)
+5. [Architecture Overview](#5-architecture-overview)
+6. [Current Gameplay Systems](#6-current-gameplay-systems)
+7. [How .NET Serves the React Frontend](#7-how-net-serves-the-react-frontend)
+8. [The P2P Mesh Network](#8-the-p2p-mesh-network)
+9. [Peer Discovery & Glyph Codes](#9-peer-discovery--glyph-codes)
+10. [The Matchmaking Service](#10-the-matchmaking-service)
+11. [Kafka Integration](#11-kafka-integration)
+12. [WebSocket Communication](#12-websocket-communication)
+13. [The Game Loop & Combat System](#13-the-game-loop--combat-system)
+14. [Frontend Architecture (React/Next.js)](#14-frontend-architecture-reactnextjs)
+15. [Native AOT & JSON Serialization](#15-native-aot--json-serialization)
+16. [Build, Deploy & Run](#16-build-deploy--run)
+17. [Next Steps / TODOs](#17-next-steps--todos)
+18. [Future Work / Todo](#18-future-work--todo)
 
 ---
 
@@ -45,15 +47,36 @@ Carcosa is a **peer-to-peer (P2P) top-down action RPG** (A Link to the Past expl
 **Key architectural decisions (as the code exists now, not the original sketch):**
 - **Each player runs a Native AOT game server** that serves a Next.js static frontend from `wwwroot` and talks to peers over `/ws/peer` (JSON WebSocket) plus a **UDP mesh socket** used for STUN, hole-punch hellos, and fallback mesh JSON.
 - **Overworld is generated in-process** (`OverworldWorldGen` / `OverworldBootstrap`, 640×640 tiles). It is not loaded from matchmaking. Combat, inventory, quest, and digging are **localhost REST** polled by React.
-- **Dungeons are still a split path.** Mesh `DungeonInstanceManager` allocates an instance, then the frontend opens `/ws` into the legacy `GameLoop` wave-shooter. Loadout is copied from the overworld. This is why dungeon feel lags the overworld (see §16).
+- **Dungeons are still a split path.** Mesh `DungeonInstanceManager` allocates an instance, then the frontend opens `/ws` into the legacy `GameLoop` wave-shooter. Loadout is copied from the overworld. This is why dungeon feel lags the overworld (see §17).
 - **Quest, Key Items, Friends, and dig loot are local authority.** They persist in encrypted `player-save.dat` (save format v3) and are **never meshed**. Multiplayer is additive.
 - **Friends ≠ Party.** Party is combat/loot grouping. Friends is a persisted peer-id list for a **future mesh-split** that does not exist yet: if a cluster must split, Friends should stay together.
 - **Matchmaking + Kafka are optional discovery only.** The game server has **no Kafka client**. Heartbeats go REST to matchmaking; Kafka lives inside the matchmaking service. Offline mode skips tracker entirely.
-- **TURN is missing.** STUN + UPnP (`UpnpPortMapper`) + Glyph + PEX exist. Symmetric NAT / CGNAT pairs still fail (see `NAT_TURN_GAP.md`).
+- **TURN is missing.** STUN + UPnP (`UpnpPortMapper`) + Glyph + PEX exist. Symmetric NAT / CGNAT pairs still fail (see [`implementations/NAT_TURN_GAP.md`](implementations/NAT_TURN_GAP.md)).
 
 ---
 
-## 2. Technology Stack
+## 2. Getting Started
+
+New clone, Windows x64:
+
+1. Install .NET 10 SDK and Node.js 18+.
+2. **Run `dev_scripts/release/build_all_release.bat` first.** This publishes Native AOT `Carcosa.exe`, `Carcosa.Matchmaking.exe`, and the bot client. It takes several minutes.
+3. Double-click a launcher under `dev_scripts/release/` (see the table). Press any key in the script console to stop what it started.
+4. Full walkthrough with expected results and screenshot slots: [docs/Developer_Testing_Guide.docx](docs/Developer_Testing_Guide.docx).
+
+| Script | What it is for |
+|--------|----------------|
+| `release/launch-two-players-local-tracker.bat` | Two localhost peers + local tracker; they auto-discover. Local testing confirmed. |
+| `release/launch-two-players-local-tracker-no-cache.bat` | Same, but clears `known-peers.json` so leftover WAN IPs cannot sneak in. |
+| `release/launch-two-players-no-tracker-no-cache.bat` | Two peers, no tracker, no cache. Join with Glyph sharing. Local testing confirmed. |
+| `release/launch-full-test.bat` | Tracker + two peers without localhost pin (closest to production flags). |
+| `develop/build_all_debug.bat` then `develop/launch-*.bat` | Same launchers against Debug builds. |
+
+Same-machine tests pin `127.0.0.1`. Long-distance Glyph tests: run `Carcosa.exe` with **no** `--public-address` so STUN can advertise the real public IP.
+
+---
+
+## 3. Technology Stack
 
 | Layer | Technology |
 |-------|-----------|----------------|
@@ -70,7 +93,7 @@ Carcosa is a **peer-to-peer (P2P) top-down action RPG** (A Link to the Past expl
 
 ---
 
-## 3. Project Structure
+## 4. Project Structure
 
 ```
 bbq/
@@ -97,14 +120,21 @@ bbq/
 │   ├── matchmaking-dashboard/ # Admin dashboard (separate Next.js app)
 │   ├── botclient/            # Automated test bot
 │   └── tests/                # xUnit test project
-├── dev_scripts/              # Build and launch scripts (.bat + .ps1)
+├── dev_scripts/
+│   ├── release/              # Native AOT publish + launchers (start here)
+│   ├── develop/              # Debug build + the same launchers
+│   ├── python/               # Art pipeline (palettes / sprites / tilesets)
+│   └── obsolete_or_fix/      # Old per-project builders; ignore
+├── docs/                     # Current technical notes + Developer Testing Guide.docx
+├── implementations/          # Plans and future-work writeups
+├── backlog/                  # Ticket-sized remaining work
 ├── docker-compose.yml        # Kafka + Matchmaking local setup
 └── Carcosa.slnx              # .NET solution file
 ```
 
 ---
 
-## 4. Architecture Overview
+## 5. Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -168,7 +198,7 @@ bbq/
 
 ---
 
-## 5. Current Gameplay Systems
+## 6. Current Gameplay Systems
 
 This is the evolved runtime, not the original design sketch.
 
@@ -210,7 +240,7 @@ Early chain (local `QuestProgression`):
 5. Use Necronomicon from Key Items (`POST /api/gameplay/key-items/use`). A **pulsing map marker** is planted for the suggested next area. It **ignores fog-of-war**. Pulse stops when that area's boss is defeated. The player may ignore it.
 6. Later bosses raise `NecronomiconRank` and re-using See Beyond plants a new marker.
 
-Suggested chain (coordinates match dungeon entrances; content gaps noted in §16): drowned_dock → Temple of Hali → Mountain Cave → Sunken Cyclopean Quay → Palace Crypt.
+Suggested chain (coordinates match dungeon entrances; content gaps noted in §17): drowned_dock → Temple of Hali → Mountain Cave → Sunken Cyclopean Quay → Palace Crypt.
 
 Quest APIs: `GET /api/gameplay/quest`, `POST /api/gameplay/npc-talk`, `POST /api/gameplay/world-pickup`, `POST /api/gameplay/key-items/use`.
 
@@ -243,7 +273,7 @@ Quest flags, Key Items, Friends, dig spots, fog-of-war, settings, inventory, Pal
 
 ---
 
-## 6. How .NET Serves the React Frontend
+## 7. How .NET Serves the React Frontend
 
 ### The Build Pipeline
 
@@ -319,7 +349,7 @@ setInterval(fetchStats, 100);
 
 ---
 
-## 7. The P2P Mesh Network
+## 8. The P2P Mesh Network
 
 ### Concept
 
@@ -436,7 +466,7 @@ private async Task BroadcastLoop(CancellationToken ct)
 
 ---
 
-## 8. Peer Discovery & Glyph Codes
+## 9. Peer Discovery & Glyph Codes
 
 ### Three Ways Peers Find Each Other
 
@@ -502,7 +532,7 @@ When a peer receives PEX data, it connects to any unknown peers. This ensures th
 
 ---
 
-## 9. The Matchmaking Service
+## 10. The Matchmaking Service
 
 ### Overview
 
@@ -554,7 +584,7 @@ If the matchmaking service is unavailable:
 
 ---
 
-## 10. Kafka Integration
+## 11. Kafka Integration
 
 ### Purpose
 
@@ -629,7 +659,7 @@ If Kafka is unavailable:
 
 ---
 
-## 11. WebSocket Communication
+## 12. WebSocket Communication
 
 ### Two WebSocket Endpoints
 
@@ -698,7 +728,7 @@ public sealed class PeerMessage
 
 ---
 
-## 12. The Game Loop & Combat System
+## 13. The Game Loop & Combat System
 
 `GameLoop` is the **dungeon / wave-shooter** tick loop (WebSocket `/ws`). Overworld combat is a separate 20Hz loop in `OverworldCombatSync` driven by REST. When a dungeon starts, `SessionManager` copies the overworld loadout onto dungeon player entities so primary/secondary abilities match. Dungeon ticks now call `CombatSystem.ProcessAbility` plus stamina / i-frame processing — closer to overworld, but the map and encounter model are still `MapGenerator` + `WaveSystem`, not the overworld tile rules.
 
@@ -796,7 +826,7 @@ public static string? DetermineHost(IEnumerable<string> allPeerIds)
 
 ---
 
-## 13. Frontend Architecture (React/Next.js)
+## 14. Frontend Architecture (React/Next.js)
 
 ### Component Hierarchy
 
@@ -888,7 +918,7 @@ const render = useCallback(() => {
 
 ---
 
-## 14. Native AOT & JSON Serialization
+## 15. Native AOT & JSON Serialization
 
 ### Why Native AOT
 
@@ -920,7 +950,7 @@ public partial class PeerJsonContext : JsonSerializerContext { }
 
 ---
 
-## 15. Build, Deploy & Run
+## 16. Build, Deploy & Run
 
 ### Prerequisites
 
@@ -952,27 +982,38 @@ dotnet test /p:SkipFrontendBuild=true   # from src/tests/
 
 ### Running Locally
 
+Preferred path after a clone:
+
 ```powershell
-# Option 1: Single player (debug)
+# 1) Native AOT publish (several minutes)
+dev_scripts\release\build_all_release.bat
+
+# 2) Two localhost peers + local tracker (auto-discover)
+dev_scripts\release\launch-two-players-local-tracker.bat
+
+# Glyph-only (no tracker, no peer cache)
+dev_scripts\release\launch-two-players-no-tracker-no-cache.bat
+```
+
+Debug / faster iterate:
+
+```powershell
+dev_scripts\develop\build_all_debug.bat
+dev_scripts\develop\launch-two-players-local-tracker.bat
+```
+
+```powershell
+# Single player from source (Debug, skips publish)
 cd src/backend
 dotnet run
 
-# Option 2: Two players (testing P2P mesh)
-cd dev_scripts
-.\launch-two-players.ps1   # Starts two instances on ports 5000 and 5001
-
-# Option 3: Full stack (matchmaking + Kafka + game)
-docker-compose up -d       # Starts Kafka + matchmaking
+# Optional Kafka + matchmaking via compose, then one game process
+docker-compose up -d
 cd src/backend
 dotnet run -- --matchmaking-url=http://localhost:5100
-
-I typically build the release cut and run a script to run 2 peers and 1 matchmaking instance.  If you would like to do this then
-go into the dev_scripts folder and run: build_all_release.bat (it takes a few minutes... feels like forever)
-Then you can just double click the script: launch_full_test.bat and it will launch all the needed exe's - Full persistance
- and many other features are not implemented fully but the core game and architecture is fully working.
-
-
 ```
+
+Walkthrough of every launcher, expected results, and screenshot slots: [docs/Developer_Testing_Guide.docx](docs/Developer_Testing_Guide.docx). Core overworld, Glyphs, and optional tracker discovery work. Persistence and many content systems are still incomplete; see §17 and `backlog/`.
 
 ### CLI Arguments
 
@@ -982,7 +1023,10 @@ Then you can just double click the script: launch_full_test.bat and it will laun
 | `--headless` | false | No browser window (server only) |
 | `--name=X` | "Carcosa Server" | Player display name |
 | `--spawn-bots=N` | 0 | Auto-spawn N bot players |
-| `--matchmaking-url=URL` | http://localhost:5100 | Matchmaking service address |
+| `--matchmaking-url=URL` | http://localhost:5100 | Matchmaking / tracker address |
+| `--public-address=IP:port` | (STUN/UPnP) | Pin Glyph + tracker address (localhost tests) |
+| `--no-cache-connect` | off | Do not dial known-peers.json |
+| `--clear-peer-cache` | off | Delete known-peers.json |
 | `--seed=N` | (none) | Dungeon seed (instance mode) |
 | `--scenario=X` | (none) | Dungeon scenario (instance mode) |
 
@@ -1000,7 +1044,7 @@ Players receive: the exe + wwwroot folder. Double-click to play. No installation
 
 ---
 
-## 16. Next Steps / TODOs
+## 17. Next Steps / TODOs
 
 Ordered roughly by player-facing impact. Solo must remain complete; multiplayer stays optional.
 
@@ -1017,7 +1061,7 @@ Ordered roughly by player-facing impact. Solo must remain complete; multiplayer 
 - [x] Key Items screen (K) for permanent items.
 - [x] Merek / Old Book Husk / Necronomicon / See Beyond early chain.
 - [ ] Award **Obsidian Shovel** from a later dungeon (suggested: Temple of Hali boss). Digging exists but returns “no shovel” until then.
-- [ ] Wire dig artifact **passives** to combat/AI/stamina (they currently grant Key Items + flavor only). See artifact table in [SPRITE_TECHNICAL.md](SPRITE_TECHNICAL.md) / `DigSystem.Artifacts`.
+- [ ] Wire dig artifact **passives** to combat/AI/stamina (they currently grant Key Items + flavor only). See artifact table in [docs/SPRITE_TECHNICAL.md](docs/SPRITE_TECHNICAL.md) / `DigSystem.Artifacts`.
 - [ ] Additional Necronomicon functions after See Beyond (each boss should add a named page/ability, not only rank).
 - [ ] Clue items / map fragments that mark productive dig spots on the map (most digs are empty by design).
 - [ ] Replace placeholder `old_book_husk.png` (16×20) with final art.
@@ -1026,7 +1070,7 @@ Ordered roughly by player-facing impact. Solo must remain complete; multiplayer 
 
 - [x] Friends selection + save persistence (`SavedFriend` in v3 save).
 - [ ] **Mesh-split / bounded neighborhood:** when a cluster is too large, split shards but **prefer keeping Friends together**. Algorithm does not exist yet; consume `QuestProgression.Friends` / save `Friends`. Do not use Friends for loot rights.
-- [ ] TURN relay for symmetric NAT / CGNAT (`NAT_TURN_GAP.md`). UPnP already attempts a quiet map of the TCP listen port.
+- [ ] TURN relay for symmetric NAT / CGNAT ([`implementations/NAT_TURN_GAP.md`](implementations/NAT_TURN_GAP.md)). UPnP already attempts a quiet map of the TCP listen port.
 - [ ] IPv6 Glyphs (`GlyphCodec` is IPv4).
 - [ ] Unify dungeon instances onto the mesh (`DungeonInstanceManager`) instead of dropping into local `/ws` GameLoop.
 
@@ -1035,7 +1079,7 @@ Ordered roughly by player-facing impact. Solo must remain complete; multiplayer 
 - [ ] Interior buildings as real maps (some houses are enterable stubs).
 - [ ] Day/night or Second-Sun Lens active effect (secret dig artifact).
 - [ ] Nameless City Key door (secret dig artifact has no function).
-- [ ] Named palettes for reference art exist in `palettes.json` / `palettes.ts`; drop reference PNGs under `assets/references/` and re-run `dev_scripts/extract-palettes.py` to sample true colors.
+- [ ] Named palettes for reference art exist in `palettes.json` / `palettes.ts`; drop reference PNGs under `assets/references/` and re-run `dev_scripts/python/palettes/extract-palettes.py` to sample true colors.
 - [ ] Audio / music pass (settings have volume; little content).
 - [ ] Anti-cheat is post-hoc trust of peer position (documented); no verification yet.
 
@@ -1046,10 +1090,27 @@ Ordered roughly by player-facing impact. Solo must remain complete; multiplayer 
 3. **AOT JSON:** register every new DTO.
 4. **Friends list is split-input, not party.** Party = combat/loot. Friends = future neighborhood preference.
 
-Related: [DEPENDENCY_TREE.md](DEPENDENCY_TREE.md), [SPRITE_TECHNICAL.md](SPRITE_TECHNICAL.md), [NAT_TURN_GAP.md](NAT_TURN_GAP.md), [implementations/VERTICAL_SLICE_BACKLOG.md](implementations/VERTICAL_SLICE_BACKLOG.md).
+Related: [docs/DEPENDENCY_TREE.md](docs/DEPENDENCY_TREE.md), [docs/SPRITE_TECHNICAL.md](docs/SPRITE_TECHNICAL.md), [implementations/NAT_TURN_GAP.md](implementations/NAT_TURN_GAP.md), [implementations/VERTICAL_SLICE_BACKLOG.md](implementations/VERTICAL_SLICE_BACKLOG.md), [backlog/README.md](backlog/README.md).
 
 ---
 
+## 18. Future Work / Todo
+
+Ticket-sized remaining work lives in [`backlog/`](backlog/README.md). Longer plans and diagnoses live in [`implementations/`](implementations/):
+
+| Doc | Why it is there |
+|-----|-----------------|
+| [`VERTICAL_SLICE_BACKLOG.md`](implementations/VERTICAL_SLICE_BACKLOG.md) | Dungeon load/exit, Dim Carcosa, slice blockers |
+| [`NAT_TURN_GAP.md`](implementations/NAT_TURN_GAP.md) | TURN / hard-NAT pairs; IPv6 Glyphs; neighborhood bound |
+| [`OVERWORLD_VISION.md`](implementations/OVERWORLD_VISION.md) | Region list and art-pipeline notes for the 640x640 map |
+| [`P2P_LOOT_DISTRIBUTION_PLAN.md`](implementations/P2P_LOOT_DISTRIBUTION_PLAN.md) | Loot windows, autonomous pickup, task assignment |
+| [`mesh-shard-network-plan.md`](implementations/mesh-shard-network-plan.md) | Gossip / shard mesh evolution |
+
+What already works today: solo overworld, local two-peer mesh (tracker auto-discover or Glyph), long-distance Glyph share without `--public-address`, optional matchmaking tracker, STUN + UPnP, PEX + peer cache, Key Items / See Beyond early chain.
+
+Highest-impact gaps (same order as §17): dungeon/overworld parity, remaining quest dungeons as distinct maps, Obsidian Shovel + dig passives, Friends-biased mesh split, TURN.
+
+---
 
 ## License
 

@@ -11,9 +11,9 @@
     "dialogue": "src/frontend/lib/npc-dialogue.ts",
     "palettes": "src/frontend/lib/palettes.ts",
     "worldGen": "src/backend/Gameplay/OverworldWorldGen.cs",
-    "packSprites": "dev_scripts/pack-sprite-assets.py",
-    "packAttackRows": "dev_scripts/pack-attack-rows.py",
-    "packBiomes": "dev_scripts/pack-biome-art.py"
+    "packSprites": "dev_scripts/python/sprites/pack-sprite-assets.py",
+    "packAttackRows": "dev_scripts/python/sprites/pack-attack-rows.py",
+    "packBiomes": "dev_scripts/python/tilesets/pack-biome-art.py"
   },
   "conventions": {
     "view": "three-quarter / ¾ (LTTP + Chaos Engine). Sprites are feet-anchored on the world point. Buildings show a south face; the door is on the south wall. Enter by walking up from the south; exit interiors through the bottom door.",

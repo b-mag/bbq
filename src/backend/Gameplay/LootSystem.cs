@@ -122,10 +122,49 @@ public static class LootSystem
         new LootTableEntry { ItemId = "worn_leather_boots", Weight = 6 },
     ];
 
+    private static readonly LootTableEntry[] CultistLootTable =
+    [
+        new LootTableEntry { ItemId = "dark_feathers", Weight = 40, MinQuantity = 1, MaxQuantity = 2 },
+        new LootTableEntry { ItemId = "tattered_hide", Weight = 24 },
+        new LootTableEntry { ItemId = "worn_leather_boots", Weight = 16 },
+        new LootTableEntry { ItemId = "dim_shore_blade", Weight = 16 },
+        new LootTableEntry { ItemId = "gronk_bone_charm", Weight = 8 },
+        new LootTableEntry { ItemId = "iron_scale_vest", Weight = 6 },
+        new LootTableEntry { ItemId = "void_touched_wand", Weight = 3 },
+        new LootTableEntry { ItemId = "pale_ward_stone", Weight = 2 },
+        new LootTableEntry { ItemId = "shadow_striders", Weight = 1 },
+    ];
+
+    private static readonly LootTableEntry[] CultLeaderLootTable =
+    [
+        new LootTableEntry { ItemId = "iron_scale_vest", Weight = 30 },
+        new LootTableEntry { ItemId = "gronk_bone_knife", Weight = 24 },
+        new LootTableEntry { ItemId = "void_touched_wand", Weight = 18 },
+        new LootTableEntry { ItemId = "pale_ward_stone", Weight = 16 },
+        new LootTableEntry { ItemId = "shadow_striders", Weight = 12 },
+    ];
+
+    private static readonly LootTableEntry[] BossLootTable =
+    [
+        new LootTableEntry { ItemId = "void_touched_wand", Weight = 28 },
+        new LootTableEntry { ItemId = "pale_ward_stone", Weight = 24 },
+        new LootTableEntry { ItemId = "shadow_striders", Weight = 22 },
+        new LootTableEntry { ItemId = "iron_scale_vest", Weight = 16 },
+        new LootTableEntry { ItemId = "gronk_bone_knife", Weight = 10 },
+    ];
+
     // Map of SubType → loot table
     private static readonly Dictionary<string, LootTableEntry[]> LootTables = new()
     {
         ["gronk"] = GronkLootTable,
+        ["cultist_torch"] = CultistLootTable,
+        ["cultist_acolyte"] = CultistLootTable,
+        ["cultist_dagger"] = CultistLootTable,
+        ["cultist_shotgun"] = CultistLootTable,
+        ["cultist_lightning"] = CultistLootTable,
+        ["cultist_chanter"] = CultistLootTable,
+        ["cult_leader"] = CultLeaderLootTable,
+        ["boss_warehouse"] = BossLootTable,
     };
 
     /// <summary>Expose loot table for deterministic generation.</summary>
@@ -219,6 +258,75 @@ public static class LootSystem
 
                     break;
                 }
+            }
+        }
+
+        return drops;
+    }
+
+    /// <summary>
+    /// Dungeon drops filtered by the instance's scaled level. Higher AvgLevel
+    /// unlocks rarer items and extra rolls.
+    /// </summary>
+    public static List<GroundLootDrop> GenerateDungeonDrops(
+        string enemySubType, float enemyX, float enemyY, HashSet<string> eligiblePeerIds, int dungeonLevel)
+    {
+        var table = GetLootTable(enemySubType);
+        if (table == null || table.Length == 0)
+            return [];
+
+        var maxRarity = DungeonRules.MaxLootRarity(dungeonLevel);
+        var filtered = table.Where(e =>
+        {
+            var item = ItemRegistry.GetItem(e.ItemId);
+            return item != null && item.Rarity <= maxRarity;
+        }).ToArray();
+        if (filtered.Length == 0)
+            return [];
+
+        var rng = Random.Shared;
+        int totalWeight = 0;
+        foreach (var entry in filtered) totalWeight += entry.Weight;
+        if (totalWeight <= 0) return [];
+
+        var secondChance = dungeonLevel <= DungeonRules.MeleeOnlyMaxLevel ? 0.20f
+            : dungeonLevel <= DungeonRules.PassiveUntilAttackedMaxLevel ? 0.40f
+            : 0.55f;
+        int rollCount = rng.NextSingle() < secondChance ? 2 : 1;
+        if (enemySubType.StartsWith("boss_", StringComparison.OrdinalIgnoreCase))
+            rollCount = Math.Max(rollCount, 2);
+
+        var drops = new List<GroundLootDrop>();
+        for (int r = 0; r < rollCount; r++)
+        {
+            int roll = rng.Next(totalWeight);
+            int cumulative = 0;
+            foreach (var entry in filtered)
+            {
+                cumulative += entry.Weight;
+                if (roll >= cumulative) continue;
+
+                var item = ItemRegistry.GetItem(entry.ItemId);
+                if (item == null) break;
+
+                int quantity = entry.MinQuantity == entry.MaxQuantity
+                    ? entry.MinQuantity
+                    : rng.Next(entry.MinQuantity, entry.MaxQuantity + 1);
+                if (item.Rarity == ItemRarity.Common && dungeonLevel > 1)
+                    quantity = DungeonRules.ScaleStat(quantity, Math.Min(dungeonLevel, 10));
+
+                drops.Add(new GroundLootDrop
+                {
+                    DropId = $"loot_{Interlocked.Increment(ref _dropCounter)}",
+                    ItemId = entry.ItemId,
+                    Quantity = quantity,
+                    X = enemyX,
+                    Y = enemyY,
+                    EligiblePeerIds = eligiblePeerIds,
+                    Rarity = item.Rarity,
+                    DropMode = LootDropMode.Solo,
+                });
+                break;
             }
         }
 

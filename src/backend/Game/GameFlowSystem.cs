@@ -17,6 +17,7 @@
 //   - Broadcast calls use fire-and-forget (don't block game loop for network I/O).
 // =============================================================================
 
+using Carcosa.Server.Gameplay;
 using Carcosa.Server.Network;
 
 namespace Carcosa.Server.Game;
@@ -45,11 +46,9 @@ public sealed class GameFlowSystem
     {
         if (state.Phase != GamePhase.Playing && state.Phase != GamePhase.WaveIntermission) return;
 
-        // Check for game over: all players dead/incapacitated
+        RespawnDeadPlayers(state);
         CheckGameOver(state, sessionManager);
-
-        // Clean up dead enemy entities (remove after a delay for death animation)
-        CleanupDeadEnemies(state);
+        CleanupDeadEnemies(state, sessionManager);
     }
 
     /// <summary>
@@ -122,14 +121,21 @@ public sealed class GameFlowSystem
     }
 
     /// <summary>
-    /// Handle player taking lethal damage (called from collision/damage code).
-    /// Players become incapacitated rather than permanently dead.
+    /// Lethal damage returns the player to the dungeon entrance at full HP.
+    /// Same character as overworld — no downed/spectate loop.
     /// </summary>
     public void OnPlayerDowned(GameState state, Entity player)
     {
-        player.IsAlive = false;
+        player.IsAlive = true;
+        player.Health = player.MaxHealth;
         player.VelocityX = 0;
         player.VelocityY = 0;
+        if (state.Map != null)
+        {
+            var (x, y) = DungeonRules.GetEntrancePosition(state.Map);
+            player.X = x;
+            player.Y = y;
+        }
         player.IsDirty = true;
 
         _ = _connectionManager.BroadcastAsync(new GameMessage
@@ -137,15 +143,25 @@ public sealed class GameFlowSystem
             Type = MessageTypes.GameEvent,
             GameEvent = new GameEventPayload
             {
-                Event = "death",
+                Event = "respawn",
                 TargetId = player.Id,
                 X = player.X,
                 Y = player.Y,
-                Message = "Downed!"
+                Message = "You fall. The dungeon returns you to the entrance."
             }
         });
 
-        Console.WriteLine($"[Game] Player {player.Id} downed!");
+        Console.WriteLine($"[Game] Player {player.Id} returned to dungeon entrance.");
+    }
+
+    private void RespawnDeadPlayers(GameState state)
+    {
+        foreach (var (_, entity) in state.Entities)
+        {
+            if (entity.Type != EntityType.Player) continue;
+            if (entity.IsAlive) continue;
+            OnPlayerDowned(state, entity);
+        }
     }
 
     /// <summary>
@@ -223,21 +239,25 @@ public sealed class GameFlowSystem
         }
     }
 
-    private void CleanupDeadEnemies(GameState state)
+    private void CleanupDeadEnemies(GameState state, SessionManager sessionManager)
     {
-        // Remove dead enemies after they've been flagged for 2 seconds (40 ticks)
         var toRemove = new List<string>();
         foreach (var (id, entity) in state.Entities)
         {
-            if (entity.Type == EntityType.Enemy && !entity.IsAlive)
-            {
-                toRemove.Add(id);
-            }
+            if (entity.Type != EntityType.Enemy || entity.IsAlive) continue;
+
+            Entity? killer = null;
+            if (!string.IsNullOrEmpty(entity.TaggedBy))
+                killer = state.GetPlayerByOwnerId(entity.TaggedBy);
+            if (killer == null && !string.IsNullOrEmpty(entity.AggroTargetId))
+                state.Entities.TryGetValue(entity.AggroTargetId, out killer);
+            if (killer != null && killer.Type == EntityType.Player)
+                sessionManager.OnDungeonEnemyKilled(entity, killer);
+
+            toRemove.Add(id);
         }
 
         foreach (var id in toRemove)
-        {
             state.RemoveEntity(id);
-        }
     }
 }

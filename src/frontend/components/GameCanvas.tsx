@@ -61,6 +61,8 @@ export interface GameCanvasProps {
   inputHandler?: { updateAimAngle: (playerScreenX: number, playerScreenY: number) => void } | null;
   /** Cosmetic body used for the local player sprite. */
   localFigure?: string;
+  /** Canvas cursor CSS (from settings). */
+  cursor?: string;
 }
 
 /**
@@ -81,6 +83,7 @@ export default function GameCanvas({
   spectateTargetId,
   inputHandler,
   localFigure,
+  cursor = 'crosshair',
 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<Camera>(createCamera(width, height, tileSize));
@@ -215,7 +218,7 @@ export default function GameCanvas({
         display: 'block',
         background: '#0d0a07',
         imageRendering: 'pixelated',
-        cursor: 'crosshair',
+        cursor,
       }}
     />
   );

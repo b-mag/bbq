@@ -24,6 +24,7 @@ import XpBar from './XpBar';
 import AbilityBar from './AbilityBar';
 import PauseMenu from './PauseMenu';
 import SettingsPanel, { GameSettings } from './SettingsPanel';
+import { canvasCursorCss, normalizeCursor, type CursorStyle } from '@/lib/engine/cursor';
 import InventoryPanel from './InventoryPanel';
 import AbilitySelectPanel from './AbilitySelectPanel';
 import FlameOfferingPanel from './FlameOfferingPanel';
@@ -79,7 +80,13 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
   const [nearbyAltar, setNearbyAltar] = useState(false);
   const [pendingInvite, setPendingInvite] = useState<{ fromPeerId: string; inviterName: string } | null>(null);
   const [chatFocused, setChatFocused] = useState(false);
-  const [clientSettings, setClientSettings] = useState({ showGlyphOverlay: true, showFps: false, devMode: false });
+  const [clientSettings, setClientSettings] = useState({
+    showGlyphOverlay: true,
+    showFps: false,
+    devMode: false,
+    showHudOverworld: false,
+    cursorOverworld: 'crosshair' as CursorStyle,
+  });
   const [showMap, setShowMap] = useState(false);
   const [fog, setFog] = useState<FogOfWar | null>(null);
   const fogRef = useRef<FogOfWar | null>(null);
@@ -468,6 +475,8 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
           showGlyphOverlay: d.showGlyphOverlay !== false,
           showFps: !!d.showFps,
           devMode: !!d.devMode,
+          showHudOverworld: !!d.showHudOverworld,
+          cursorOverworld: normalizeCursor(d.cursorOverworld),
         });
       })
       .catch(() => {});
@@ -719,7 +728,13 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
   }, [pendingInvite]);
 
   const handleSettingsSaved = useCallback((s: GameSettings) => {
-    setClientSettings({ showGlyphOverlay: s.showGlyphOverlay, showFps: s.showFps, devMode: s.devMode });
+    setClientSettings({
+      showGlyphOverlay: s.showGlyphOverlay,
+      showFps: s.showFps,
+      devMode: s.devMode,
+      showHudOverworld: s.showHudOverworld,
+      cursorOverworld: s.cursorOverworld,
+    });
   }, []);
 
   const persistFog = useCallback(() => {
@@ -807,27 +822,29 @@ export default function OverworldView({ playerName, playerFigure, onDisconnect, 
         secondaryAbility={stats.secondaryAbility}
         onMobilityDash={handleMobilityDash}
         onSpiritBegin={() => input.setMovementLocked(true)}
+        cursor={canvasCursorCss(clientSettings.cursorOverworld)}
       />
 
-      <HealthBar hp={stats.hp} maxHp={stats.maxHp} level={stats.level} />
-
-      <StaminaBar
-        stamina={stats.stamina}
-        maxStamina={stats.maxStamina}
-        isDepleted={stats.isStaminaDepleted}
-        shieldHp={stats.shieldHp}
-      />
-
-      <XpBar xp={stats.xp} xpForNextLevel={stats.xpForNextLevel} />
-
-      <AbilityBar
-        primaryAbility={stats.primaryAbility}
-        secondaryAbility={stats.secondaryAbility}
-        primaryCooldown={stats.primaryCooldown}
-        secondaryCooldown={stats.secondaryCooldown}
-        stamina={stats.stamina}
-        isDepleted={stats.isStaminaDepleted}
-      />
+      {clientSettings.showHudOverworld && (
+        <>
+          <HealthBar hp={stats.hp} maxHp={stats.maxHp} level={stats.level} />
+          <StaminaBar
+            stamina={stats.stamina}
+            maxStamina={stats.maxStamina}
+            isDepleted={stats.isStaminaDepleted}
+            shieldHp={stats.shieldHp}
+          />
+          <XpBar xp={stats.xp} xpForNextLevel={stats.xpForNextLevel} />
+          <AbilityBar
+            primaryAbility={stats.primaryAbility}
+            secondaryAbility={stats.secondaryAbility}
+            primaryCooldown={stats.primaryCooldown}
+            secondaryCooldown={stats.secondaryCooldown}
+            stamina={stats.stamina}
+            isDepleted={stats.isStaminaDepleted}
+          />
+        </>
+      )}
 
       <SaveIndicator />
 

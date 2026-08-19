@@ -208,6 +208,9 @@ public static class CombatSystem
                     entity.TaggedBy = player.OwnerId;
                 }
 
+                if (entity.Type == EntityType.Enemy)
+                    MarkEnemyHit(entity, player.Id);
+
                 break; // Single target — hit only the first enemy in range
             }
         }
@@ -347,6 +350,7 @@ public static class CombatSystem
             entity.IsDirty = true;
             if (entity.TaggedBy == null && player.OwnerId != null)
                 entity.TaggedBy = player.OwnerId;
+            MarkEnemyHit(entity, player.Id);
         }
     }
 
@@ -562,6 +566,7 @@ public static class CombatSystem
             {
                 entity.TakeDamage(SurgeonMeleeDamage);
                 entity.IsDirty = true;
+                MarkEnemyHit(entity, player.Id);
                 break;
             }
         }
@@ -617,5 +622,14 @@ public static class CombatSystem
         };
 
         state.AddEntity(projectile);
+    }
+
+    /// <summary>Tag an enemy so dungeon AI will chase even when auto-aggro is off.</summary>
+    internal static void MarkEnemyHit(Entity enemy, string attackerId)
+    {
+        if (enemy.Type != EntityType.Enemy || !enemy.IsAlive) return;
+        enemy.AggroTargetId = attackerId;
+        enemy.AggroTicks = 0;
+        enemy.IsDirty = true;
     }
 }

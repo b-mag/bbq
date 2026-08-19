@@ -83,6 +83,10 @@ export interface EntityState {
   isAlive: boolean;
   medKits: number;
   attackCooldown?: number;
+  stamina?: number;
+  maxStamina?: number;
+  primaryAbility?: string;
+  secondaryAbility?: string;
 }
 
 export interface ChatMessagePayload {

@@ -22,7 +22,7 @@
 // The public address is discovered at runtime via:
 //   1. STUN query (determines public IP behind NAT)
 //   2. UPnP port mapping (opens router port)
-//   3. Manual specification (--public-address CLI flag)
+//   3. Manual specification (--public-address CLI flag; pins tracker registration)
 //   4. Localhost fallback (LAN-only mode)
 //
 // WHY A SEPARATE FILE:
@@ -88,6 +88,13 @@ public sealed class PeerIdentity
     /// Public TCP address (IP:listenPort) for tracker / WebSocket fallback.
     /// </summary>
     public string PublicAddress { get; set; } = "";
+
+    /// <summary>
+    /// When true, <c>--public-address</c> pinned this value. Tracker reflect and
+    /// STUN must not replace it. Runtime only — never persist this to disk.
+    /// </summary>
+    [JsonIgnore]
+    public bool PublicAddressPinned { get; set; }
 
     /// <summary>
     /// STUN-mapped UDP address (IP:mappedPort) advertised in Glyphs.

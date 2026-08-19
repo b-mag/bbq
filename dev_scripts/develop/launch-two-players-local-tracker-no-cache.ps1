@@ -1,0 +1,75 @@
+# =============================================================================
+# Launch Two Local Peers Against the Optional Tracker (No Peer Cache)
+#
+# Same as launch-two-players-local-tracker.ps1, plus:
+#   --no-cache-connect   do not dial known-peers.json on startup
+#   --clear-peer-cache   delete known-peers.json so stale WAN IPs cannot sneak in
+#
+# Starts:
+#   - Tracker / matchmaking: port 5100
+#   - Player 1: port 5000, glyph/tracker address 127.0.0.1:5000
+#   - Player 2: port 5001, glyph/tracker address 127.0.0.1:5001
+#
+# For internet Glyph tests, run Carcosa.exe with no --public-address.
+# For the same local test with cache enabled, use launch-two-players-local-tracker.ps1.
+# For no tracker, use launch-two-players-no-tracker-no-cache.ps1.
+# =============================================================================
+
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$backendExe = Join-Path $scriptDir "..\..\src\backend\bin\Debug\net10.0\Carcosa.exe"
+$matchmakingExe = Join-Path $scriptDir "..\..\src\matchmaking\bin\Debug\net10.0\Carcosa.Matchmaking.exe"
+$trackerUrl = "http://127.0.0.1:5100"
+
+if (-not (Test-Path $backendExe)) {
+    Write-Host "ERROR: Game server exe not found. Run build_all_debug.bat first." -ForegroundColor Red
+    Write-Host "  Expected: $backendExe" -ForegroundColor Gray
+    pause
+    exit 1
+}
+if (-not (Test-Path $matchmakingExe)) {
+    Write-Host "ERROR: Matchmaking exe not found. Run build_all_debug.bat first." -ForegroundColor Red
+    Write-Host "  Expected: $matchmakingExe" -ForegroundColor Gray
+    pause
+    exit 1
+}
+
+Write-Host "=========================================" -ForegroundColor Cyan
+Write-Host "  Local Tracker Two-Peer Test (no cache)" -ForegroundColor Cyan
+Write-Host "=========================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  Tracker:    $trackerUrl" -ForegroundColor Yellow
+Write-Host "  Peer cache: cleared, bootstrap disabled" -ForegroundColor Yellow
+Write-Host "  Player 1:   http://localhost:5000  (pinned 127.0.0.1:5000)" -ForegroundColor Green
+Write-Host "  Player 2:   http://localhost:5001  (pinned 127.0.0.1:5001)" -ForegroundColor Green
+Write-Host ""
+Write-Host "  Production Glyph / STUN path is not used." -ForegroundColor Gray
+Write-Host "  Peers auto-discover each other through the local tracker." -ForegroundColor Gray
+Write-Host ""
+
+Write-Host "[1/3] Launching Matchmaking (with dashboard)..." -ForegroundColor White
+$matchmaking = Start-Process -FilePath $matchmakingExe -ArgumentList "--port=5100" -WorkingDirectory (Split-Path $matchmakingExe) -PassThru
+Start-Sleep -Seconds 2
+
+Write-Host "[2/3] Launching Player 1 (Franz on port 5000)..." -ForegroundColor White
+$player1 = Start-Process -FilePath $backendExe -ArgumentList "--port=5000", "--name=Franz", "--matchmaking-url=$trackerUrl", "--public-address=127.0.0.1:5000", "--no-cache-connect", "--clear-peer-cache" -WorkingDirectory (Split-Path $backendExe) -PassThru
+Start-Sleep -Seconds 2
+
+Write-Host "[3/3] Launching Player 2 (Marina on port 5001)..." -ForegroundColor White
+$player2 = Start-Process -FilePath $backendExe -ArgumentList "--port=5001", "--name=Marina", "--matchmaking-url=$trackerUrl", "--public-address=127.0.0.1:5001", "--no-cache-connect", "--clear-peer-cache" -WorkingDirectory (Split-Path $backendExe) -PassThru
+
+Write-Host ""
+Write-Host "  All launched!" -ForegroundColor Green
+Write-Host "  Player 1 PID: $($player1.Id)" -ForegroundColor Gray
+Write-Host "  Player 2 PID: $($player2.Id)" -ForegroundColor Gray
+Write-Host "  Tracker PID:  $($matchmaking.Id)" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  Open both UIs. They should find each other via tracker within a few seconds." -ForegroundColor White
+Write-Host "  Confirm logs show pinned 127.0.0.1, not your WAN IP." -ForegroundColor Gray
+Write-Host ""
+Write-Host "  Press any key to STOP all..." -ForegroundColor Red
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+
+if (!$player2.HasExited) { Stop-Process -Id $player2.Id -Force -ErrorAction SilentlyContinue }
+if (!$player1.HasExited) { Stop-Process -Id $player1.Id -Force -ErrorAction SilentlyContinue }
+if (!$matchmaking.HasExited) { Stop-Process -Id $matchmaking.Id -Force -ErrorAction SilentlyContinue }
+Write-Host "Stopped." -ForegroundColor Green

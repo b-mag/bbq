@@ -41,12 +41,13 @@ interface OverworldCanvasProps {
   secondaryAbility?: string;
   onMobilityDash?: (x: number, y: number) => void;
   onSpiritBegin?: () => void;
+  cursor?: string;
 }
 
 export default function OverworldCanvas({
   map, players, localPlayerId, dungeonEntrances, worldObjects, landmarks, enemies, projectiles, lootDrops, width, height, onPlayerClick,
   lakeDrained = false, combatEnabled = true, interiorMode = false,
-  localFigure, secondaryAbility, onMobilityDash, onSpiritBegin,
+  localFigure, secondaryAbility, onMobilityDash, onSpiritBegin, cursor = 'crosshair',
 }: OverworldCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<Camera>(createCamera(width, height, 32));
@@ -369,7 +370,7 @@ export default function OverworldCanvas({
       ref={canvasRef}
       width={width}
       height={height}
-      style={{ display: 'block', background: '#0d0f07', imageRendering: 'pixelated' }}
+      style={{ display: 'block', background: '#0d0f07', imageRendering: 'pixelated', cursor }}
     />
   );
 }

@@ -53,7 +53,8 @@ public sealed class NatTraversalService
         {
             identity.PublicAddress = PeerAddress.NormalizeManualAddress(manualPublicAddress, listenPort);
             identity.StunMappedAddress = identity.PublicAddress;
-            Console.WriteLine($"[P2P:NAT] Using manual public address: {identity.PublicAddress}");
+            identity.PublicAddressPinned = true;
+            Console.WriteLine($"[P2P:NAT] Using pinned public address: {identity.PublicAddress}");
             try
             {
                 _udp?.Start(listenPort);

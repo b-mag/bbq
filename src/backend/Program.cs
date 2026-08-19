@@ -53,7 +53,8 @@ if (args.Contains("--help") || args.Contains("-h"))
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  --port=<port>                 Set the listening port (default: 5000)");
-    Console.WriteLine("  --public-address=<ip[:port]>  Override the address encoded in Glyphs");
+    Console.WriteLine("  --public-address=<ip[:port]>  Pin Glyph + tracker address (skips STUN/reflect)");
+    Console.WriteLine("  --matchmaking-url=<url>       Tracker/matchmaking URL (default from appsettings)");
     Console.WriteLine("  --headless                    Run in server-only mode (no browser needed)");
     Console.WriteLine("  --spawn-bots=N                Spawn N bot players on startup");
     Console.WriteLine("  --help, -h                    Show this help message");
@@ -240,13 +241,7 @@ if (dungeonSeed.HasValue && dungeonScenario != null)
     // Pre-generate the map from the seed
     var mapSeed = dungeonSeed.Value;
     gameLoop.State.Scenario = sessionManager.SelectedScenario;
-    gameLoop.State.Map = sessionManager.SelectedScenario switch
-    {
-        MapScenario.PallidSanctum => MapGenerator.GenerateTemple(100, 100, mapSeed),
-        MapScenario.MountainCave => MapGenerator.GenerateCave(60, 50, mapSeed),
-        MapScenario.DrownedDock => MapGenerator.GenerateDrownedDock(80, 60, mapSeed),
-        _ => MapGenerator.Generate(80, 60, mapSeed),
-    };
+    gameLoop.State.Map = DungeonRules.GenerateScaledMap(sessionManager.SelectedScenario, mapSeed, 1);
     Console.WriteLine($"[Dungeon Instance] Map generated: {gameLoop.State.Map.Width}x{gameLoop.State.Map.Height}");
 
     // Override OnPlayerConnected to auto-start when first player joins
@@ -443,7 +438,7 @@ connectionManager.OnPlayerConnected += (playerId, playerName) =>
         "hollow" => MapScenario.Hollow,
         _ => MapScenario.DrownedDock,
     };
-    sessionManager.TryJoinActiveDungeon(playerId, dungeonMap, scenario);
+    sessionManager.TryJoinActiveDungeon(playerId, dungeonMap, scenario, snap.AvgLevel);
 };
 
 connectionManager.OnPlayerDisconnected += (playerId) =>
@@ -687,7 +682,10 @@ app.MapGet("/api/gameplay/settings", (SaveManager saves) =>
     var d = saves.CurrentData;
     return Results.Ok(new SettingsResponse(
         d.DisplayName, d.OfflineMode, d.MasterVolume, d.ShowGlyphOverlay, d.ShowFps,
-        d.DevMode, d.LastSavedAt.ToString("O")));
+        d.DevMode, d.ShowHudOverworld, d.ShowHudDungeon,
+        DungeonRules.NormalizeCursor(d.CursorOverworld),
+        DungeonRules.NormalizeCursor(d.CursorDungeon),
+        d.LastSavedAt.ToString("O")));
 });
 
 app.MapPost("/api/gameplay/settings", (SettingsUpdateRequest request, SaveManager saves, PeerIdentity identity, OverworldCombatSync combat, TrackerClient tracker) =>
@@ -712,10 +710,17 @@ app.MapPost("/api/gameplay/settings", (SettingsUpdateRequest request, SaveManage
     if (request.ShowGlyphOverlay.HasValue) data.ShowGlyphOverlay = request.ShowGlyphOverlay.Value;
     if (request.ShowFps.HasValue) data.ShowFps = request.ShowFps.Value;
     if (request.DevMode.HasValue) data.DevMode = request.DevMode.Value;
+    if (request.ShowHudOverworld.HasValue) data.ShowHudOverworld = request.ShowHudOverworld.Value;
+    if (request.ShowHudDungeon.HasValue) data.ShowHudDungeon = request.ShowHudDungeon.Value;
+    if (request.CursorOverworld != null) data.CursorOverworld = DungeonRules.NormalizeCursor(request.CursorOverworld);
+    if (request.CursorDungeon != null) data.CursorDungeon = DungeonRules.NormalizeCursor(request.CursorDungeon);
     saves.Save(data);
     return Results.Ok(new SettingsResponse(
         data.DisplayName, data.OfflineMode, data.MasterVolume, data.ShowGlyphOverlay, data.ShowFps,
-        data.DevMode, data.LastSavedAt.ToString("O")));
+        data.DevMode, data.ShowHudOverworld, data.ShowHudDungeon,
+        DungeonRules.NormalizeCursor(data.CursorOverworld),
+        DungeonRules.NormalizeCursor(data.CursorDungeon),
+        data.LastSavedAt.ToString("O")));
 });
 
 app.MapPost("/api/gameplay/explored-fog", (FogUpdateRequest request, SaveManager saves, OverworldCombatSync combat) =>
@@ -1456,8 +1461,14 @@ internal record PlayerStatsResponse(
     bool LoadoutLocked, string LastSavedAt);
 
 internal record BootstrapResponse(bool NeedsName, string DisplayName, bool OfflineMode, int Level, string Figure, float LastX, float LastY, bool DevMode, string ExploredFogBase64);
-internal record SettingsResponse(string DisplayName, bool OfflineMode, float MasterVolume, bool ShowGlyphOverlay, bool ShowFps, bool DevMode, string LastSavedAt);
-internal record SettingsUpdateRequest(string? DisplayName, bool? OfflineMode, float? MasterVolume, bool? ShowGlyphOverlay, bool? ShowFps, bool? DevMode);
+internal record SettingsResponse(
+    string DisplayName, bool OfflineMode, float MasterVolume, bool ShowGlyphOverlay, bool ShowFps,
+    bool DevMode, bool ShowHudOverworld, bool ShowHudDungeon,
+    string CursorOverworld, string CursorDungeon, string LastSavedAt);
+internal record SettingsUpdateRequest(
+    string? DisplayName, bool? OfflineMode, float? MasterVolume, bool? ShowGlyphOverlay, bool? ShowFps,
+    bool? DevMode, bool? ShowHudOverworld, bool? ShowHudDungeon,
+    string? CursorOverworld, string? CursorDungeon);
 internal record FogUpdateRequest(string? ExploredFogBase64);
 internal record PartyResponse(string? PartyId, string? LeaderPeerId, string[] MemberPeerIds, string[] PendingInvitePeerIds);
 internal record PartyInviteRequest(string TargetPeerId);

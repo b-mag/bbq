@@ -63,6 +63,12 @@ public sealed class GameState
     /// <summary>Which map scenario is being played. Affects map generation and wave rules.</summary>
     public MapScenario Scenario { get; set; } = MapScenario.DrownedDock;
 
+    /// <summary>
+    /// Average party level this instance scaled to. Drives enemy HP/damage,
+    /// XP/loot, auto-aggro (off at 10 and below), and enemy projectiles (off at 7 and below).
+    /// </summary>
+    public int AvgLevel { get; set; } = 1;
+
     /// <summary>Ticks remaining until next wave starts (during intermission).</summary>
     public int WaveCountdownTicks { get; set; }
 

@@ -128,10 +128,18 @@ public static class ProgressionSystem
         return enemySubType switch
         {
             "gronk" => GronkKillXP,
+            "cultist_torch" or "cultist_acolyte" or "cultist_dagger" => 15,
+            "cultist_shotgun" or "cultist_lightning" or "cultist_chanter" => 20,
+            "cult_leader" => 50,
+            "boss_warehouse" => 200,
             _ when enemySubType.StartsWith("elite_", StringComparison.OrdinalIgnoreCase) => GronkKillXP * 5,
-            _ => 10, // Default for unknown enemies
+            _ => 10,
         };
     }
+
+    /// <summary>Kill XP scaled to the dungeon's average party level.</summary>
+    public static int GetScaledKillXp(string enemySubType, int dungeonLevel)
+        => DungeonRules.ScaleXp(GetKillXP(enemySubType), dungeonLevel);
 
     /// <summary>
     /// Compute XP awarded to each eligible peer for a kill.

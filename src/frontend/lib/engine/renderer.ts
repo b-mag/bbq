@@ -267,8 +267,9 @@ function renderEnemy(
   nowMs: number,
   tileSize: number
 ): void {
-  const color = ENEMY_COLORS[entity.subType || 'default'] || ENEMY_COLORS.default;
-  const spriteName = spriteCache?.getEntry(entity.subType || '') ? (entity.subType as string) : 'gronk';
+  const visualType = (entity.subType || '').replace(/^elite_/i, '');
+  const color = ENEMY_COLORS[visualType] || ENEMY_COLORS.default;
+  const spriteName = spriteCache?.getEntry(visualType) ? visualType : 'gronk';
   const moving = entity.velocityX !== 0 || entity.velocityY !== 0;
   const dist = walkDistance(entity.id, entity.x, entity.y);
   const facing = facingFromMotion(entity.id, entity.velocityX, entity.velocityY);

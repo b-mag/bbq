@@ -67,6 +67,14 @@ public sealed class PlayerSaveData
     public bool ShowFps { get; set; }
     /// <summary>Local test tools: map reveal, click-to-travel. Never synced to peers.</summary>
     public bool DevMode { get; set; }
+    /// <summary>Overworld HUD chrome (HP/stamina/XP/abilities). DEV toggle; default off.</summary>
+    public bool ShowHudOverworld { get; set; }
+    /// <summary>Dungeon HUD chrome (side panels). DEV toggle; default off.</summary>
+    public bool ShowHudDungeon { get; set; }
+    /// <summary>Canvas cursor in overworld: off, crosshair, sword, hand.</summary>
+    public string CursorOverworld { get; set; } = "crosshair";
+    /// <summary>Canvas cursor in dungeon: off, crosshair, sword, hand.</summary>
+    public string CursorDungeon { get; set; } = "crosshair";
     /// <summary>Packed fog-of-war bitfield (4x4 chunks). Local knowledge only — not P2P.</summary>
     public string ExploredFogBase64 { get; set; } = "";
 

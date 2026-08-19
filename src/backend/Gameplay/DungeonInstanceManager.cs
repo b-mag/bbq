@@ -19,9 +19,6 @@ namespace Carcosa.Server.Gameplay;
 /// </summary>
 public sealed class DungeonInstanceManager
 {
-    public const int CaveWidth = 60;
-    public const int CaveHeight = 50;
-
     private readonly PeerMesh _mesh;
     private readonly PeerIdentity _localIdentity;
     private readonly OverworldCombatSync _combat;
@@ -163,7 +160,7 @@ public sealed class DungeonInstanceManager
 
     private void ApplyDungeonStart(PeerDungeonStartPayload payload, bool isLocalOrigin)
     {
-        var map = GenerateMap(payload.Scenario, payload.Seed);
+        var map = GenerateMap(payload.Scenario, payload.Seed, payload.AvgLevel);
 
         lock (_lock)
         {
@@ -206,15 +203,10 @@ public sealed class DungeonInstanceManager
         Console.WriteLine($"[Dungeon] Left instance {instanceId} victory={victory}");
     }
 
-    private static TileMap GenerateMap(string scenario, int seed)
+    private static TileMap GenerateMap(string scenario, int seed, int avgLevel)
     {
-        return ParseScenario(scenario) switch
-        {
-            MapScenario.MountainCave => MapGenerator.GenerateCave(CaveWidth, CaveHeight, seed),
-            MapScenario.PallidSanctum => MapGenerator.GenerateTemple(100, 100, seed),
-            MapScenario.DrownedDock => MapGenerator.GenerateDrownedDock(80, 60, seed),
-            _ => MapGenerator.Generate(80, 60, seed),
-        };
+        var parsed = ParseScenario(scenario);
+        return DungeonRules.GenerateScaledMap(parsed, seed, avgLevel);
     }
 
     private int ComputeAvgLevel(IReadOnlyList<string> memberIds)

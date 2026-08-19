@@ -203,6 +203,14 @@ public sealed class EntityState
     public int MedKits { get; set; }
     /// <summary>Remaining attack cooldown ticks. Clients play attack frames when this jumps up.</summary>
     public int AttackCooldown { get; set; }
+    /// <summary>Current stamina (players). Same resource as overworld combat.</summary>
+    public float Stamina { get; set; }
+    /// <summary>Maximum stamina (players).</summary>
+    public float MaxStamina { get; set; }
+    /// <summary>Equipped primary ability id (players).</summary>
+    public string? PrimaryAbility { get; set; }
+    /// <summary>Equipped secondary ability id (players).</summary>
+    public string? SecondaryAbility { get; set; }
 }
 
 /// <summary>
